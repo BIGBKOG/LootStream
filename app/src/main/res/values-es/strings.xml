@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">LootStream</string>
+    <string name="shortcut_up_next_short">Seguir</string>
+    <string name="shortcut_up_next_long">Seguir viendo y Cola</string>
+    <string name="shortcut_library_short">Biblioteca</string>
+    <string name="shortcut_library_long">Abrir Biblioteca Multimedia</string>
+    <string name="shortcut_favorites_short">Colecciones</string>
+    <string name="shortcut_favorites_long">Mi Bóveda y Favoritos</string>
+</resources>

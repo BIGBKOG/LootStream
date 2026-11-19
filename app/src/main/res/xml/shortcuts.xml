@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="shortcut_up_next"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_calendar"
+        android:shortcutShortLabel="@string/shortcut_up_next_short"
+        android:shortcutLongLabel="@string/shortcut_up_next_long">
+        <intent
+            android:action="com.example.action.UP_NEXT"
+            android:targetPackage="com.aistudio.lootdrop.fkgxwm"
+            android:targetClass="com.example.MainActivity">
+            <extra android:name="EXTRA_TARGET_TAB" android:value="QUEUE" />
+        </intent>
+    </shortcut>
+
+    <shortcut
+        android:shortcutId="shortcut_library"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_drops"
+        android:shortcutShortLabel="@string/shortcut_library_short"
+        android:shortcutLongLabel="@string/shortcut_library_long">
+        <intent
+            android:action="com.example.action.LIBRARY"
+            android:targetPackage="com.aistudio.lootdrop.fkgxwm"
+            android:targetClass="com.example.MainActivity">
+            <extra android:name="EXTRA_TARGET_TAB" android:value="LIBRARY" />
+        </intent>
+    </shortcut>
+
+    <shortcut
+        android:shortcutId="shortcut_favorites"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_vault"
+        android:shortcutShortLabel="@string/shortcut_favorites_short"
+        android:shortcutLongLabel="@string/shortcut_favorites_long">
+        <intent
+            android:action="com.example.action.FAVORITES"
+            android:targetPackage="com.aistudio.lootdrop.fkgxwm"
+            android:targetClass="com.example.MainActivity">
+            <extra android:name="EXTRA_TARGET_TAB" android:value="VAULT" />
+        </intent>
+    </shortcut>
+</shortcuts>

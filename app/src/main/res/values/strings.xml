@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">LootStream</string>
+    <string name="shortcut_up_next_short">Up Next</string>
+    <string name="shortcut_up_next_long">Up Next &amp; Continue Watching</string>
+    <string name="shortcut_library_short">Library</string>
+    <string name="shortcut_library_long">Open Media Library</string>
+    <string name="shortcut_favorites_short">Collections</string>
+    <string name="shortcut_favorites_long">My Vault &amp; Favorites</string>
+</resources>

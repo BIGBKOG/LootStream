@@ -1,0 +1,24 @@
+Categories:
+  - Games
+License: MIT
+WebSite: https://github.com/BIGBKOG/lootdrop
+SourceCode: https://github.com/BIGBKOG/lootdrop
+IssueTracker: https://github.com/BIGBKOG/lootdrop/issues
+
+AutoName: LootDrop
+
+RepoType: git
+Repo: https://github.com/BIGBKOG/lootdrop.git
+
+Builds:
+  - versionName: '4.0'
+    versionCode: 19
+    commit: v4.0
+    subdir: app
+    gradle:
+      - yes
+
+AutoUpdateMode: Version
+UpdateCheckMode: Tags
+CurrentVersion: '4.0'
+CurrentVersionCode: 19

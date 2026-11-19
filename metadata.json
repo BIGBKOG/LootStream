@@ -1,0 +1,6 @@
+{
+  "name": "LootStream",
+  "description": "Personal media streaming player with Windows PC Host streaming, local video & audio library playback, cyber-neon Material 3 UI, and watch-progress tracking.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

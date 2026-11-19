@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">LootStream</string>
+    <string name="shortcut_up_next_short">À suivre</string>
+    <string name="shortcut_up_next_long">Reprendre la lecture &amp; File</string>
+    <string name="shortcut_library_short">Médiathèque</string>
+    <string name="shortcut_library_long">Ouvrir la Médiathèque</string>
+    <string name="shortcut_favorites_short">Collections</string>
+    <string name="shortcut_favorites_long">Mon Coffre &amp; Favoris</string>
+</resources>
