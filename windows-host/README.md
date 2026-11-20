@@ -1,33 +1,31 @@
-# LootStream PC Host (`LootStreamHost.exe`)
+# LootStream Windows Host (`LootStreamHost-Setup.exe`)
 
-Standalone personal media server host designed specifically for **LootStream Android**.
+Single-file self-installing Windows personal media host & built-in Media Center designed for **LootStream Android** and desktop playback.
 
-## Quick Start on Windows 10 / 11 (Zero Downloads Required)
+## Option 1: Download the Ready-to-Run `.exe` Installer (Recommended)
 
-Windows includes the `.NET Framework 4.x` C# compiler (`csc.exe`) out of the box.
+Once pushed to GitHub, the **Build Windows & Linux Host Installers** workflow automatically compiles and publishes **`LootStreamHost-Setup.exe`** to **GitHub Releases** (and Workflow Artifacts):
 
-1. Double-click **`Build-LootStreamHost-Exe.bat`** in this folder.
-2. It produces **`LootStreamHost.exe`** right beside the script.
-3. Double-click **`LootStreamHost.exe`**:
-   - Automatically adds your Windows `Videos` and `Music` folders (you can add/remove any folders in the UI).
-   - Displays your PC's LAN URL (for example `http://192.168.1.42:8765`).
-   - Optionally set a numeric pairing PIN.
-4. In **LootStream Android**, tap **Add Media -> Connect PC Host**, enter the displayed LAN URL (and PIN if set), and tap **Pair & Sync Host**.
+1. Download **`LootStreamHost-Setup.exe`** from the repository's **Releases** page — no `.cs` files or extra downloads needed.
+2. Double-click **`LootStreamHost-Setup.exe`** and click **Yes** to install:
+   - Installs to `%LocalAppData%\LootStreamHost\LootStreamHost.exe`
+   - Creates **Start Menu** and **Desktop** shortcuts (`LootStream Host`)
+   - Registers **LootStream Host** in Windows **Installed Apps** (`--uninstall` supported)
+   - Adds Windows Firewall allow rules for TCP port `8765` and UDP discovery port `8766`
+   - Opens the built-in **Media Center** (`http://127.0.0.1:8765/`) so you can watch Movies, TV Shows, and Music on Windows and connect **LootStream Android** via **QR Code**, **6-digit Easy Login code**, or auto-discovery.
 
-> **Windows Firewall Note:** If prompted by Windows Defender Firewall on first launch, allow access on **Private networks** so your Android device on the same Wi-Fi can reach port `8765`.
+*(Pass `--install` for unattended install, `--portable` to run without installing, or `--uninstall` to remove.)*
 
-## Cross-Platform Python Option
+## Option 2: Compile Locally on Windows 10 / 11
 
-You can also run the zero-dependency Python 3 host on Windows, macOS, or Linux:
-
-```bash
-python3 lootstream_host.py --folders ~/Videos ~/Music --port 8765 --pin 1234
-```
+If you cloned the source directly on Windows, double-click **`Build-LootStreamHost-Exe.bat`** — it uses Windows' built-in `.NET Framework 4.x` (`csc.exe`) to compile `LootStreamHost.cs` + embedded Web UI resources into the single **`LootStreamHost-Setup.exe`**.
 
 ## Implemented Host Endpoints
 
+- `UDP 8766` (`LOOTSTREAM_DISCOVER_V1`) — Responds on the local Wi-Fi with host name, platform, and LAN URLs for zero-IP discovery
 - `GET /api/info` — Host name, platform, PIN requirement, indexed item count
-- `POST /api/pair` — Validates optional PIN and returns bearer token
+- `POST /api/pair` — Validates either the **6-digit Easy Login code** (`quickCode`) or optional static `pin` and returns a bearer token
+- `POST /api/host/quick-code/refresh` — Generates a fresh 6-digit Easy Login code & QR URI
 - `GET /api/library` — Returns indexed videos, movies, TV episodes, and audio with saved watch progress & favorites
 - `GET /api/stream/{id}` — Direct HTTP streaming with `Accept-Ranges: bytes` and `206 Partial Content` seeking
 - `POST /api/items/{id}/progress` — Saves playback position and watch status back to the host

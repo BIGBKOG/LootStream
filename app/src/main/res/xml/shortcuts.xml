@@ -8,7 +8,7 @@
         android:shortcutLongLabel="@string/shortcut_up_next_long">
         <intent
             android:action="com.example.action.UP_NEXT"
-            android:targetPackage="com.aistudio.lootdrop.fkgxwm"
+            android:targetPackage="com.aistudio.lootstream.qzvkxm"
             android:targetClass="com.example.MainActivity">
             <extra android:name="EXTRA_TARGET_TAB" android:value="QUEUE" />
         </intent>
@@ -22,7 +22,7 @@
         android:shortcutLongLabel="@string/shortcut_library_long">
         <intent
             android:action="com.example.action.LIBRARY"
-            android:targetPackage="com.aistudio.lootdrop.fkgxwm"
+            android:targetPackage="com.aistudio.lootstream.qzvkxm"
             android:targetClass="com.example.MainActivity">
             <extra android:name="EXTRA_TARGET_TAB" android:value="LIBRARY" />
         </intent>
@@ -36,7 +36,7 @@
         android:shortcutLongLabel="@string/shortcut_favorites_long">
         <intent
             android:action="com.example.action.FAVORITES"
-            android:targetPackage="com.aistudio.lootdrop.fkgxwm"
+            android:targetPackage="com.aistudio.lootstream.qzvkxm"
             android:targetClass="com.example.MainActivity">
             <extra android:name="EXTRA_TARGET_TAB" android:value="VAULT" />
         </intent>

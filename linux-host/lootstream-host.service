@@ -1,0 +1,14 @@
+[Unit]
+Description=LootStream Linux Media Host
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/LootStream/linux-host
+ExecStart=/usr/bin/python3 %h/LootStream/linux-host/lootstream_linux_host.py --no-open
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

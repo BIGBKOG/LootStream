@@ -1,6 +1,8 @@
 package com.example.ui
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import com.example.data.model.HostServerConfig
 import com.example.data.model.MediaItem
 import com.example.data.model.MediaLibraryStats
@@ -68,10 +70,21 @@ internal fun HomeDialogsOverlay(
     }
 
     if (showHostDialog) {
+        val discoveredHosts by viewModel.discoveredHosts.collectAsState()
+        val isDiscoveringHosts by viewModel.isDiscoveringHosts.collectAsState()
         HostServerDialog(
             servers = servers,
+            discoveredHosts = discoveredHosts,
+            isDiscoveringHosts = isDiscoveringHosts,
             isSyncing = isSyncing,
             onDismiss = { viewModel.setShowHostDialog(false) },
+            onDiscoverHosts = { viewModel.discoverWifiHosts() },
+            onConnectQuickCode = { code, preferredUrl, onDone ->
+                viewModel.connectWithSixDigitCode(code, preferredUrl, onDone)
+            },
+            onConnectQrPayload = { rawQr, onDone ->
+                viewModel.connectFromQrPayload(rawQr, onDone)
+            },
             onConnect = { url, pin, onDone ->
                 viewModel.connectHostServer(url, pin, onDone)
             },

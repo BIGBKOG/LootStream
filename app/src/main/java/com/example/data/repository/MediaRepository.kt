@@ -101,38 +101,67 @@ class MediaRepository(private val context: Context) {
         )
     }
 
+    suspend fun discoverLanHosts(): List<com.example.data.remote.DiscoveredHost> =
+        LootStreamHostClient.discoverLanHosts(context)
+
     suspend fun connectHostServer(
         rawUrl: String,
-        pin: String
+        pin: String,
+        quickCode: String = ""
     ): Result<HostServerConfig> = withContext(Dispatchers.IO) {
         runCatching {
             val normalizedUrl = LootStreamHostClient.normalizeServerUrl(rawUrl)
-            val deviceId = UUID.randomUUID().toString()
             val pairResult = LootStreamHostClient.pairWithHost(
                 context = context,
                 rawUrl = normalizedUrl,
-                pin = pin
+                pin = pin,
+                quickCode = quickCode
             ).getOrThrow()
 
-            val config = HostServerConfig(
-                id = pairResult.serverId,
-                name = pairResult.serverName,
-                serverUrl = normalizedUrl,
-                hostPlatform = pairResult.hostPlatform,
-                accessToken = pairResult.accessToken,
-                deviceId = deviceId,
-                serverVersion = pairResult.serverVersion,
-                lastSyncedAt = 0L,
-                itemCount = 0,
-                isActive = true
-            )
-            serverDao.upsert(MediaServerEntity.fromDomain(config))
-            val syncedCount = syncServer(config.id).getOrElse { 0 }
-            config.copy(
-                lastSyncedAt = System.currentTimeMillis(),
-                itemCount = syncedCount
-            )
+            savePairedHostAndSync(normalizedUrl, pairResult)
         }
+    }
+
+    suspend fun connectHostWithQuickCode(
+        quickCode: String,
+        knownHosts: List<com.example.data.remote.DiscoveredHost>,
+        preferredUrl: String? = null
+    ): Result<HostServerConfig> = withContext(Dispatchers.IO) {
+        runCatching {
+            val (resolvedUrl, pairResult) = LootStreamHostClient.pairWithAnyDiscoveredHost(
+                context = context,
+                quickCode = quickCode,
+                knownHosts = knownHosts,
+                preferredUrl = preferredUrl
+            ).getOrThrow()
+
+            savePairedHostAndSync(resolvedUrl, pairResult)
+        }
+    }
+
+    private suspend fun savePairedHostAndSync(
+        normalizedUrl: String,
+        pairResult: com.example.data.remote.HostPairResult
+    ): HostServerConfig {
+        val deviceId = UUID.randomUUID().toString()
+        val config = HostServerConfig(
+            id = pairResult.serverId,
+            name = pairResult.serverName,
+            serverUrl = normalizedUrl,
+            hostPlatform = pairResult.hostPlatform,
+            accessToken = pairResult.accessToken,
+            deviceId = deviceId,
+            serverVersion = pairResult.serverVersion,
+            lastSyncedAt = 0L,
+            itemCount = 0,
+            isActive = true
+        )
+        serverDao.upsert(MediaServerEntity.fromDomain(config))
+        val syncedCount = syncServer(config.id).getOrElse { 0 }
+        return config.copy(
+            lastSyncedAt = System.currentTimeMillis(),
+            itemCount = syncedCount
+        )
     }
 
     suspend fun syncServer(serverId: String): Result<Int> = withContext(Dispatchers.IO) {

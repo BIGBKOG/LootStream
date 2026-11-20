@@ -18,6 +18,8 @@ import com.example.data.model.PlayerResizeMode
 import com.example.data.model.UserProfile
 import com.example.data.model.WatchStatus
 import com.example.data.remote.ApiClient
+import com.example.data.remote.DiscoveredHost
+import com.example.data.remote.LootStreamHostClient
 import com.example.data.repository.MediaRepository
 import com.example.i18n.AppLanguage
 import com.example.i18n.LocaleSyncHelper
@@ -171,6 +173,12 @@ class LootStreamViewModel(application: Application) : AndroidViewModel(applicati
     // Status & Dialogs
     private val _isSyncing = MutableStateFlow(false)
     val isSyncing: StateFlow<Boolean> = _isSyncing.asStateFlow()
+
+    private val _discoveredHosts = MutableStateFlow<List<DiscoveredHost>>(emptyList())
+    val discoveredHosts: StateFlow<List<DiscoveredHost>> = _discoveredHosts.asStateFlow()
+
+    private val _isDiscoveringHosts = MutableStateFlow(false)
+    val isDiscoveringHosts: StateFlow<Boolean> = _isDiscoveringHosts.asStateFlow()
 
     private val _statusMessage = MutableStateFlow<String?>(null)
     val statusMessage: StateFlow<String?> = _statusMessage.asStateFlow()
@@ -391,6 +399,16 @@ class LootStreamViewModel(application: Application) : AndroidViewModel(applicati
         )
     }
 
+    fun discoverWifiHosts() {
+        if (_isDiscoveringHosts.value) return
+        viewModelScope.launch {
+            _isDiscoveringHosts.value = true
+            runCatching { repository.discoverLanHosts() }
+                .onSuccess { hosts -> _discoveredHosts.value = hosts }
+            _isDiscoveringHosts.value = false
+        }
+    }
+
     fun connectHostServer(
         url: String,
         pin: String,
@@ -407,6 +425,64 @@ class LootStreamViewModel(application: Application) : AndroidViewModel(applicati
                 refreshStorageMetrics()
             }.onFailure { err ->
                 val msg = err.message ?: "Unable to connect to LootStream PC Host"
+                _errorMessage.value = msg
+                onComplete(false, msg)
+            }
+        }
+    }
+
+    fun connectWithSixDigitCode(
+        code: String,
+        preferredUrl: String? = null,
+        onComplete: (Boolean, String?) -> Unit = { _, _ -> }
+    ) {
+        viewModelScope.launch {
+            _isSyncing.value = true
+            _errorMessage.value = null
+            val res = repository.connectHostWithQuickCode(
+                quickCode = code,
+                knownHosts = _discoveredHosts.value,
+                preferredUrl = preferredUrl
+            )
+            _isSyncing.value = false
+            res.onSuccess { srv ->
+                _statusMessage.value = "Connected to ${srv.name} (${srv.itemCount} items synced)"
+                onComplete(true, null)
+                refreshStorageMetrics()
+            }.onFailure { err ->
+                val msg = err.message ?: "Unable to connect using 6-digit code"
+                _errorMessage.value = msg
+                onComplete(false, msg)
+            }
+        }
+    }
+
+    fun connectFromQrPayload(
+        rawQr: String,
+        onComplete: (Boolean, String?) -> Unit = { _, _ -> }
+    ) {
+        val parsed = LootStreamHostClient.parsePairQrPayload(rawQr)
+        if (parsed == null) {
+            val msg = "Not a valid LootStream Host QR code"
+            _errorMessage.value = msg
+            onComplete(false, msg)
+            return
+        }
+        viewModelScope.launch {
+            _isSyncing.value = true
+            _errorMessage.value = null
+            val res = repository.connectHostServer(
+                rawUrl = parsed.url,
+                pin = "",
+                quickCode = parsed.code
+            )
+            _isSyncing.value = false
+            res.onSuccess { srv ->
+                _statusMessage.value = "Connected to ${srv.name} (${srv.itemCount} items synced)"
+                onComplete(true, null)
+                refreshStorageMetrics()
+            }.onFailure { err ->
+                val msg = err.message ?: "Unable to pair from QR code"
                 _errorMessage.value = msg
                 onComplete(false, msg)
             }

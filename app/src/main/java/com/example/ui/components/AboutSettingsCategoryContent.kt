@@ -150,9 +150,9 @@ fun AboutSettingsCategoryContent() {
 
             Text(
                 text = when (lang) {
-                    AppLanguage.SPANISH -> "Reproductor multimedia personal privado para tu PC Host Windows (LootStreamHost.exe), videos locales con Photo Picker y streams HLS/DASH con Jetpack Media3."
-                    AppLanguage.FRENCH -> "Lecteur multimédia personnel pour votre PC Host Windows (LootStreamHost.exe), vidéos locales et flux HLS/DASH avec Jetpack Media3."
-                    AppLanguage.ENGLISH -> "Private personal media hub built for your Windows PC Host (LootStreamHost.exe), zero-permission local videos & audio, and direct HLS/DASH streams powered by Jetpack Media3."
+                    AppLanguage.SPANISH -> "Reproductor multimedia personal privado para tu Host Linux o PC Windows, videos locales con Photo Picker y streams HLS/DASH con Jetpack Media3."
+                    AppLanguage.FRENCH -> "Lecteur multimédia personnel pour votre Hôte Linux ou PC Windows, vidéos locales et flux HLS/DASH avec Jetpack Media3."
+                    AppLanguage.ENGLISH -> "Private personal media hub built for your Linux & Windows PC Host, zero-permission local videos & audio, and direct HLS/DASH streams powered by Jetpack Media3."
                 },
                 fontSize = 12.sp,
                 lineHeight = 17.sp,
@@ -201,16 +201,16 @@ fun AboutSettingsCategoryContent() {
             testTag = "credit_engine_media3"
         ),
         TechCreditEntry(
-            title = "LootStreamHost.exe LAN Protocol",
+            title = "LootStream Host LAN Protocol",
             role = when (lang) {
-                AppLanguage.SPANISH -> "Sincronización con Host de PC Propio"
-                AppLanguage.FRENCH -> "Synchronisation avec PC Host Personnel"
-                AppLanguage.ENGLISH -> "Windows PC Host & LAN Streaming"
+                AppLanguage.SPANISH -> "Sincronización con Host Linux y Windows"
+                AppLanguage.FRENCH -> "Synchronisation avec Hôte Linux & Windows"
+                AppLanguage.ENGLISH -> "Linux & Windows Host LAN Streaming"
             },
             description = when (lang) {
-                AppLanguage.SPANISH -> "Emparejamiento directo por LAN con PIN opcional, escaneo automático de carpetas en Windows, HTTP Range 206 y sincronización de progreso."
-                AppLanguage.FRENCH -> "Appairage LAN direct par code PIN, scan de dossiers Windows, streaming HTTP Range 206 et suivi de lecture."
-                AppLanguage.ENGLISH -> "Direct LAN pairing with optional PIN, automatic Windows media folder indexing, HTTP Range 206 streaming & progress sync."
+                AppLanguage.SPANISH -> "Emparejamiento directo por LAN con PIN opcional, escaneo automático de carpetas en Linux y Windows, HTTP Range 206 y sincronización de progreso."
+                AppLanguage.FRENCH -> "Appairage LAN direct par code PIN, scan de dossiers Linux et Windows, streaming HTTP Range 206 et suivi de lecture."
+                AppLanguage.ENGLISH -> "Direct LAN pairing with optional PIN, automatic Linux & Windows media folder indexing, HTTP Range 206 streaming & progress sync."
             },
             icon = Icons.Default.Dns,
             badge = "PC HOST",

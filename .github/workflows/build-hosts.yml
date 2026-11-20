@@ -1,0 +1,85 @@
+name: Build Windows & Linux Host Installers
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows-exe:
+    name: Build Windows 1-File Installer (.exe)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compile LootStreamHost-Setup.exe with Embedded Media Center
+        shell: cmd
+        run: |
+          "%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /target:winexe /optimize+ ^
+            /out:"windows-host\LootStreamHost-Setup.exe" ^
+            /reference:System.dll ^
+            /reference:System.Core.dll ^
+            /reference:System.Web.Extensions.dll ^
+            /reference:System.Windows.Forms.dll ^
+            /reference:System.Drawing.dll ^
+            /resource:"linux-host\web\index.html,index.html" ^
+            /resource:"linux-host\web\styles.css,styles.css" ^
+            /resource:"linux-host\web\app.js,app.js" ^
+            "windows-host\LootStreamHost.cs"
+          if not exist "windows-host\LootStreamHost-Setup.exe" exit /b 1
+
+      - name: Upload Windows .exe Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LootStreamHost-Setup-Windows
+          path: windows-host/LootStreamHost-Setup.exe
+
+  build-linux-installer:
+    name: Build Linux 1-File Installer (.run)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build LootStreamHost-Linux.run
+        run: |
+          chmod +x linux-host/build-installer.sh
+          ./linux-host/build-installer.sh
+          test -x linux-host/LootStreamHost-Linux.run
+
+      - name: Upload Linux .run Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LootStreamHost-Linux
+          path: linux-host/LootStreamHost-Linux.run
+
+  publish-release:
+    name: Publish Host Installers to GitHub Releases
+    needs: [ build-windows-exe, build-linux-installer ]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Create or Update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          if [[ "${GITHUB_REF}" != refs/tags/* ]]; then
+            TAG="host-latest"
+            gh release delete "$TAG" -y --cleanup-tag >/dev/null 2>&1 || true
+          else
+            gh release delete "$TAG" -y >/dev/null 2>&1 || true
+          fi
+          gh release create "$TAG" \
+            dist/LootStreamHost-Setup-Windows/LootStreamHost-Setup.exe \
+            dist/LootStreamHost-Linux/LootStreamHost-Linux.run \
+            --title "LootStream Host Installers ($TAG)" \
+            --notes "Direct single-file installers — download **LootStreamHost-Setup.exe** (Windows) or **LootStreamHost-Linux.run** (Linux) with no source files or scripts required." \
+            --latest

@@ -275,9 +275,9 @@ fun PlaybackSettingsCategoryContent(
                     Text(
                         text = if (servers.isEmpty()) {
                             when (lang) {
-                                AppLanguage.SPANISH -> "Conecta LootStreamHost.exe en tu PC para transmitir directo"
-                                AppLanguage.FRENCH -> "Connectez LootStreamHost.exe sur votre PC pour diffuser"
-                                AppLanguage.ENGLISH -> "Connect LootStreamHost.exe on your Windows PC for direct LAN streaming"
+                                AppLanguage.SPANISH -> "Conecta tu Host Linux o Windows (LootStreamHost.exe) para transmitir directo"
+                                AppLanguage.FRENCH -> "Connectez votre Hôte Linux ou Windows (LootStreamHost.exe) pour diffuser"
+                                AppLanguage.ENGLISH -> "Connect your Linux Host or Windows LootStreamHost.exe for direct LAN streaming"
                             }
                         } else {
                             servers.joinToString(" • ") { "${it.name} (${it.itemCount})" }

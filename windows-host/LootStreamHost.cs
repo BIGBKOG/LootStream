@@ -1,19 +1,28 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
+using Microsoft.Win32;
 
 namespace LootStreamHost
 {
+    public class PairedDeviceInfo
+    {
+        public string deviceName { get; set; }
+        public long pairedAt { get; set; }
+    }
+
     public class HostState
     {
         public string ServerId { get; set; }
@@ -22,6 +31,7 @@ namespace LootStreamHost
         public string Pin { get; set; }
         public List<string> Folders { get; set; }
         public List<string> ValidTokens { get; set; }
+        public List<PairedDeviceInfo> PairedDevices { get; set; }
         public Dictionary<string, ItemProgress> Progress { get; set; }
 
         public HostState()
@@ -32,6 +42,7 @@ namespace LootStreamHost
             Pin = "";
             Folders = new List<string>();
             ValidTokens = new List<string>();
+            PairedDevices = new List<PairedDeviceInfo>();
             Progress = new Dictionary<string, ItemProgress>();
         }
     }
@@ -50,6 +61,8 @@ namespace LootStreamHost
     {
         public string Id { get; set; }
         public string FilePath { get; set; }
+        public string PosterPath { get; set; }
+        public string BackdropPath { get; set; }
         public string Title { get; set; }
         public string Subtitle { get; set; }
         public string MediaType { get; set; }
@@ -62,28 +75,355 @@ namespace LootStreamHost
         public long AddedAt { get; set; }
     }
 
+    public static class SelfInstaller
+    {
+        public const string AppVersion = "1.0.0";
+        public const string AppDisplayName = "LootStream Host";
+        private const string UninstallRegKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\LootStreamHost";
+
+        public static string GetInstallDir()
+        {
+            string localApp = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            return Path.Combine(localApp, "LootStreamHost");
+        }
+
+        public static string GetInstalledExePath()
+        {
+            return Path.Combine(GetInstallDir(), "LootStreamHost.exe");
+        }
+
+        public static bool IsRunningFromInstallDir()
+        {
+            try
+            {
+                string current = Path.GetFullPath(Application.ExecutablePath);
+                string installed = Path.GetFullPath(GetInstalledExePath());
+                return string.Equals(current, installed, StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return true;
+            }
+        }
+
+        public static bool HandleInstallerArgsOrPrompt(string[] args)
+        {
+            bool forceInstall = false;
+            bool forceUninstall = false;
+            bool portableMode = false;
+
+            if (args != null)
+            {
+                foreach (string arg in args)
+                {
+                    if (string.Equals(arg, "--install", StringComparison.OrdinalIgnoreCase)) forceInstall = true;
+                    else if (string.Equals(arg, "--uninstall", StringComparison.OrdinalIgnoreCase)) forceUninstall = true;
+                    else if (string.Equals(arg, "--portable", StringComparison.OrdinalIgnoreCase)) portableMode = true;
+                }
+            }
+
+            if (forceUninstall)
+            {
+                PerformUninstall(true);
+                return false;
+            }
+
+            if (forceInstall)
+            {
+                PerformInstall(true);
+                return false;
+            }
+
+            if (!portableMode && !IsRunningFromInstallDir())
+            {
+                string installedPath = GetInstalledExePath();
+                bool alreadyInstalled = File.Exists(installedPath);
+                string msg = alreadyInstalled
+                    ? "LootStream Host is already installed on this PC.\n\nClick YES to update/reinstall it with Start Menu & Desktop shortcuts and launch, or NO to run portable without installing."
+                    : "Welcome to LootStream Host v" + AppVersion + "!\n\nClick YES to install LootStream Host to your PC (Start Menu, Desktop shortcut, Windows Apps list & Firewall rule for Android streaming), or NO to run portable.";
+
+                DialogResult choice = MessageBox.Show(
+                    msg,
+                    "LootStream Host Setup",
+                    MessageBoxButtons.YesNoCancel,
+                    MessageBoxIcon.Information
+                );
+
+                if (choice == DialogResult.Cancel)
+                {
+                    return false;
+                }
+                if (choice == DialogResult.Yes)
+                {
+                    PerformInstall(true);
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        public static void PerformInstall(bool launchAfter)
+        {
+            try
+            {
+                string installDir = GetInstallDir();
+                string targetExe = GetInstalledExePath();
+                Directory.CreateDirectory(installDir);
+
+                string sourceExe = Path.GetFullPath(Application.ExecutablePath);
+                if (!string.Equals(sourceExe, Path.GetFullPath(targetExe), StringComparison.OrdinalIgnoreCase))
+                {
+                    StopOtherRunningInstances();
+                    Thread.Sleep(250);
+                    File.Copy(sourceExe, targetExe, true);
+                }
+
+                CreateShortcut(
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "LootStream Host.lnk"),
+                    targetExe,
+                    installDir,
+                    "LootStream Personal Media Host & Media Center"
+                );
+
+                string startMenuDir = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.Programs),
+                    "LootStream Host"
+                );
+                Directory.CreateDirectory(startMenuDir);
+                CreateShortcut(
+                    Path.Combine(startMenuDir, "LootStream Host.lnk"),
+                    targetExe,
+                    installDir,
+                    "LootStream Personal Media Host & Media Center"
+                );
+                CreateShortcut(
+                    Path.Combine(startMenuDir, "Uninstall LootStream Host.lnk"),
+                    targetExe,
+                    installDir,
+                    "Uninstall LootStream Host",
+                    "--uninstall"
+                );
+
+                RegisterUninstallEntry(targetExe, installDir);
+                TryAddFirewallRule(8765);
+
+                if (launchAfter)
+                {
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = targetExe,
+                        WorkingDirectory = installDir,
+                        UseShellExecute = true
+                    });
+                }
+                else
+                {
+                    MessageBox.Show(
+                        "LootStream Host was installed to:\n" + targetExe,
+                        "LootStream Host Installed",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information
+                    );
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    "Installation failed: " + ex.Message,
+                    "LootStream Host Setup Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error
+                );
+            }
+        }
+
+        public static void PerformUninstall(bool silentPrompt)
+        {
+            if (silentPrompt)
+            {
+                DialogResult res = MessageBox.Show(
+                    "Uninstall LootStream Host from this PC?\n(Your media files will not be touched.)",
+                    "Uninstall LootStream Host",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question
+                );
+                if (res != DialogResult.Yes) return;
+            }
+
+            try
+            {
+                StopOtherRunningInstances();
+
+                string desktopShortcut = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+                    "LootStream Host.lnk"
+                );
+                if (File.Exists(desktopShortcut)) File.Delete(desktopShortcut);
+
+                string startMenuDir = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.Programs),
+                    "LootStream Host"
+                );
+                if (Directory.Exists(startMenuDir)) Directory.Delete(startMenuDir, true);
+
+                try
+                {
+                    Registry.CurrentUser.DeleteSubKeyTree(UninstallRegKey, false);
+                }
+                catch { }
+
+                string installDir = GetInstallDir();
+                string cleanupCmd = "/c timeout /t 2 /nobreak >nul & rmdir /s /q \"" + installDir + "\"";
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "cmd.exe",
+                    Arguments = cleanupCmd,
+                    WindowStyle = ProcessWindowStyle.Hidden,
+                    CreateNoWindow = true
+                });
+
+                MessageBox.Show(
+                    "LootStream Host has been uninstalled.",
+                    "Uninstall Complete",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information
+                );
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    "Uninstall warning: " + ex.Message,
+                    "Uninstall",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning
+                );
+            }
+        }
+
+        private static void StopOtherRunningInstances()
+        {
+            int currentId = Process.GetCurrentProcess().Id;
+            string currentName = Process.GetCurrentProcess().ProcessName;
+            foreach (Process p in Process.GetProcessesByName(currentName))
+            {
+                if (p.Id == currentId) continue;
+                try
+                {
+                    p.CloseMainWindow();
+                    if (!p.WaitForExit(1500)) p.Kill();
+                }
+                catch { }
+            }
+        }
+
+        private static void RegisterUninstallEntry(string exePath, string installDir)
+        {
+            using (RegistryKey key = Registry.CurrentUser.CreateSubKey(UninstallRegKey))
+            {
+                if (key == null) return;
+                key.SetValue("DisplayName", AppDisplayName);
+                key.SetValue("DisplayVersion", AppVersion);
+                key.SetValue("Publisher", "LootStream");
+                key.SetValue("InstallLocation", installDir);
+                key.SetValue("DisplayIcon", exePath);
+                key.SetValue("UninstallString", "\"" + exePath + "\" --uninstall");
+                key.SetValue("NoModify", 1, RegistryValueKind.DWord);
+                key.SetValue("NoRepair", 1, RegistryValueKind.DWord);
+            }
+        }
+
+        private static void CreateShortcut(string lnkPath, string targetPath, string workingDir, string description, string args = "")
+        {
+            try
+            {
+                string psScript =
+                    "$ws = New-Object -ComObject WScript.Shell; " +
+                    "$sc = $ws.CreateShortcut('" + EscapePs(lnkPath) + "'); " +
+                    "$sc.TargetPath = '" + EscapePs(targetPath) + "'; " +
+                    "$sc.WorkingDirectory = '" + EscapePs(workingDir) + "'; " +
+                    "$sc.Description = '" + EscapePs(description) + "'; " +
+                    "$sc.IconLocation = '" + EscapePs(targetPath) + ",0'; " +
+                    (string.IsNullOrEmpty(args) ? "" : "$sc.Arguments = '" + EscapePs(args) + "'; ") +
+                    "$sc.Save()";
+
+                Process p = Process.Start(new ProcessStartInfo
+                {
+                    FileName = "powershell.exe",
+                    Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command \"" + psScript.Replace("\"", "`\"") + "\"",
+                    WindowStyle = ProcessWindowStyle.Hidden,
+                    CreateNoWindow = true
+                });
+                if (p != null) p.WaitForExit(5000);
+            }
+            catch { }
+        }
+
+        private static string EscapePs(string input)
+        {
+            return (input ?? "").Replace("'", "''");
+        }
+
+        public static void TryAddFirewallRule(int port)
+        {
+            try
+            {
+                Process pTcp = Process.Start(new ProcessStartInfo
+                {
+                    FileName = "netsh.exe",
+                    Arguments = string.Format("advfirewall firewall add rule name=\"LootStream Host (TCP {0})\" dir=in action=allow protocol=TCP localport={0}", port),
+                    Verb = "runas",
+                    WindowStyle = ProcessWindowStyle.Hidden,
+                    CreateNoWindow = true,
+                    UseShellExecute = true
+                });
+                if (pTcp != null) pTcp.WaitForExit(4000);
+
+                Process pUdp = Process.Start(new ProcessStartInfo
+                {
+                    FileName = "netsh.exe",
+                    Arguments = "advfirewall firewall add rule name=\"LootStream Host Discovery (UDP 8766)\" dir=in action=allow protocol=UDP localport=8766",
+                    Verb = "runas",
+                    WindowStyle = ProcessWindowStyle.Hidden,
+                    CreateNoWindow = true,
+                    UseShellExecute = true
+                });
+                if (pUdp != null) pUdp.WaitForExit(4000);
+            }
+            catch
+            {
+                // User may decline UAC prompt; local playback and existing rules still function.
+            }
+        }
+    }
+
     public class MainForm : Form
     {
         private static readonly HashSet<string> VideoExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            ".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4v", ".ts"
+            ".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4v", ".ts", ".ogv"
         };
 
         private static readonly HashSet<string> AudioExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            ".mp3", ".flac", ".wav", ".m4a", ".aac", ".ogg"
+            ".mp3", ".flac", ".wav", ".m4a", ".aac", ".ogg", ".opus"
         };
 
         private readonly JavaScriptSerializer _json = new JavaScriptSerializer();
         private readonly object _syncLock = new object();
         private readonly string _stateFilePath;
+        private readonly List<string> _activityLog = new List<string>();
 
         private HostState _state;
         private List<MediaEntry> _catalog = new List<MediaEntry>();
         private Dictionary<string, MediaEntry> _catalogById = new Dictionary<string, MediaEntry>();
         private HttpListener _listener;
         private Thread _listenerThread;
+        private UdpClient _udpDiscovery;
+        private Thread _udpThread;
         private volatile bool _isRunning;
+        private bool _openedBrowserOnce;
+        private string _quickCode;
 
         // Cyber UI Controls
         private TextBox _txtServerName;
@@ -91,8 +431,11 @@ namespace LootStreamHost
         private TextBox _txtPin;
         private Label _lblStatusBadge;
         private Label _lblLanUrl;
+        private Label _lblQuickCode;
         private Label _lblMediaCount;
         private Button _btnToggleServer;
+        private Button _btnOpenMediaCenter;
+        private Button _btnShowQr;
         private Button _btnCopyUrl;
         private ListBox _lstFolders;
         private TextBox _txtLog;
@@ -107,6 +450,11 @@ namespace LootStreamHost
             Directory.CreateDirectory(appData);
             _stateFilePath = Path.Combine(appData, "state.json");
             _state = LoadState();
+            if (_state.PairedDevices == null) _state.PairedDevices = new List<PairedDeviceInfo>();
+            if (_state.Folders == null) _state.Folders = new List<string>();
+            if (_state.ValidTokens == null) _state.ValidTokens = new List<string>();
+            if (_state.Progress == null) _state.Progress = new Dictionary<string, ItemProgress>();
+
             if (_state.Folders.Count == 0)
             {
                 string videos = Environment.GetFolderPath(Environment.SpecialFolder.MyVideos);
@@ -115,9 +463,57 @@ namespace LootStreamHost
                 if (!string.IsNullOrEmpty(music) && Directory.Exists(music)) _state.Folders.Add(music);
             }
 
+            _quickCode = GenerateSixDigitCode();
             InitializeCyberUi();
             RescanLibrary();
             StartServer();
+        }
+
+        private static string GenerateSixDigitCode()
+        {
+            byte[] buf = new byte[4];
+            using (RNGCryptoServiceProvider rng = new RNGCryptoServiceProvider())
+            {
+                rng.GetBytes(buf);
+            }
+            uint val = BitConverter.ToUInt32(buf, 0) % 1000000U;
+            return val.ToString("D6");
+        }
+
+        private static string FormatSixDigitCode(string code)
+        {
+            string s = (code ?? "000000").PadLeft(6, '0');
+            if (s.Length > 6) s = s.Substring(0, 6);
+            return s.Substring(0, 3) + " " + s.Substring(3, 3);
+        }
+
+        private string GetQuickPairUri()
+        {
+            string lanUrl = GetLanUrl();
+            string code;
+            string name;
+            lock (_syncLock)
+            {
+                code = _quickCode;
+                name = _state.ServerName;
+            }
+            return "lootstream://pair?url=" + Uri.EscapeDataString(lanUrl) +
+                   "&code=" + Uri.EscapeDataString(code) +
+                   "&name=" + Uri.EscapeDataString(name);
+        }
+
+        private void RefreshQuickCode()
+        {
+            string next = GenerateSixDigitCode();
+            lock (_syncLock)
+            {
+                _quickCode = next;
+            }
+            RunOnUi(delegate
+            {
+                if (_lblQuickCode != null) _lblQuickCode.Text = "Code: " + FormatSixDigitCode(next);
+            });
+            AppendLog("Generated new 6-digit Easy Login code: " + next);
         }
 
         private void InitializeCyberUi()
@@ -131,9 +527,9 @@ namespace LootStreamHost
             Color textPrimary = Color.FromArgb(241, 245, 249);
             Color textSecondary = Color.FromArgb(148, 163, 184);
 
-            this.Text = "LootStream PC Host v1.0";
-            this.Size = new Size(760, 620);
-            this.MinimumSize = new Size(680, 560);
+            this.Text = "LootStream Windows Host v" + SelfInstaller.AppVersion;
+            this.Size = new Size(780, 640);
+            this.MinimumSize = new Size(700, 580);
             this.BackColor = bg;
             this.ForeColor = textPrimary;
             this.Font = new Font("Segoe UI", 9.5f);
@@ -146,31 +542,44 @@ namespace LootStreamHost
             header.Padding = new Padding(18, 12, 18, 12);
 
             Label lblTitle = new Label();
-            lblTitle.Text = "LOOTSTREAM PC HOST";
-            lblTitle.Font = new Font("Segoe UI", 15f, FontWeightBold());
+            lblTitle.Text = "LOOTSTREAM WINDOWS HOST";
+            lblTitle.Font = new Font("Segoe UI", 14.5f, FontStyle.Bold);
             lblTitle.ForeColor = cyan;
             lblTitle.Location = new Point(18, 12);
             lblTitle.AutoSize = true;
 
             Label lblSub = new Label();
-            lblSub.Text = "Direct LAN Media Streaming Server for LootStream Android";
+            lblSub.Text = "Built-In Media Center (Movies, TV Shows, Music) + Android LAN Server";
             lblSub.Font = new Font("Segoe UI", 9f);
             lblSub.ForeColor = textSecondary;
             lblSub.Location = new Point(20, 42);
             lblSub.AutoSize = true;
 
+            _btnOpenMediaCenter = new Button();
+            _btnOpenMediaCenter.Text = "Open Media Center";
+            _btnOpenMediaCenter.Size = new Size(150, 32);
+            _btnOpenMediaCenter.Location = new Point(478, 22);
+            _btnOpenMediaCenter.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            _btnOpenMediaCenter.FlatStyle = FlatStyle.Flat;
+            _btnOpenMediaCenter.FlatAppearance.BorderSize = 0;
+            _btnOpenMediaCenter.BackColor = green;
+            _btnOpenMediaCenter.ForeColor = bg;
+            _btnOpenMediaCenter.Font = new Font("Segoe UI", 9f, FontStyle.Bold);
+            _btnOpenMediaCenter.Click += delegate { OpenMediaCenterInBrowser(); };
+
             _lblStatusBadge = new Label();
             _lblStatusBadge.Text = "STOPPED";
-            _lblStatusBadge.Font = new Font("Segoe UI", 9.5f, FontWeightBold());
+            _lblStatusBadge.Font = new Font("Segoe UI", 9.5f, FontStyle.Bold);
             _lblStatusBadge.ForeColor = textSecondary;
             _lblStatusBadge.BackColor = surfaceVar;
             _lblStatusBadge.TextAlign = ContentAlignment.MiddleCenter;
-            _lblStatusBadge.Size = new Size(110, 30);
-            _lblStatusBadge.Location = new Point(610, 22);
+            _lblStatusBadge.Size = new Size(106, 32);
+            _lblStatusBadge.Location = new Point(638, 22);
             _lblStatusBadge.Anchor = AnchorStyles.Top | AnchorStyles.Right;
 
             header.Controls.Add(lblTitle);
             header.Controls.Add(lblSub);
+            header.Controls.Add(_btnOpenMediaCenter);
             header.Controls.Add(_lblStatusBadge);
 
             Panel body = new Panel();
@@ -180,7 +589,7 @@ namespace LootStreamHost
             // Connection & Server Config Card
             Panel cfgCard = new Panel();
             cfgCard.Location = new Point(18, 14);
-            cfgCard.Size = new Size(706, 148);
+            cfgCard.Size = new Size(726, 148);
             cfgCard.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             cfgCard.BackColor = surface;
 
@@ -195,28 +604,47 @@ namespace LootStreamHost
 
             _btnToggleServer = new Button();
             _btnToggleServer.Text = "Start Server";
-            _btnToggleServer.Location = new Point(526, 32);
+            _btnToggleServer.Location = new Point(546, 32);
             _btnToggleServer.Size = new Size(162, 32);
             _btnToggleServer.Anchor = AnchorStyles.Top | AnchorStyles.Right;
             _btnToggleServer.FlatStyle = FlatStyle.Flat;
             _btnToggleServer.FlatAppearance.BorderSize = 0;
             _btnToggleServer.BackColor = cyan;
             _btnToggleServer.ForeColor = bg;
-            _btnToggleServer.Font = new Font("Segoe UI", 9.5f, FontWeightBold());
+            _btnToggleServer.Font = new Font("Segoe UI", 9.5f, FontStyle.Bold);
             _btnToggleServer.Click += delegate { ToggleServer(); };
 
-            Label lblConnectHint = MakeLabel("Enter this URL in LootStream Android -> Add Media -> Connect PC Host:", 14, 78, textSecondary);
+            Label lblConnectHint = MakeLabel("Easy Android Wi-Fi Login (scan QR or enter 6-digit code in LootStream):", 14, 78, textSecondary);
+            _lblQuickCode = new Label();
+            _lblQuickCode.Text = "Code: " + FormatSixDigitCode(_quickCode);
+            _lblQuickCode.Font = new Font("Consolas", 12.5f, FontStyle.Bold);
+            _lblQuickCode.ForeColor = cyan;
+            _lblQuickCode.Location = new Point(14, 98);
+            _lblQuickCode.Size = new Size(168, 28);
+
             _lblLanUrl = new Label();
             _lblLanUrl.Text = GetLanUrl();
-            _lblLanUrl.Font = new Font("Consolas", 11.5f, FontWeightBold());
+            _lblLanUrl.Font = new Font("Consolas", 10.5f, FontStyle.Bold);
             _lblLanUrl.ForeColor = green;
-            _lblLanUrl.Location = new Point(14, 100);
-            _lblLanUrl.Size = new Size(470, 26);
+            _lblLanUrl.Location = new Point(188, 100);
+            _lblLanUrl.Size = new Size(236, 26);
+
+            _btnShowQr = new Button();
+            _btnShowQr.Text = "QR Login";
+            _btnShowQr.Location = new Point(430, 98);
+            _btnShowQr.Size = new Size(88, 30);
+            _btnShowQr.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            _btnShowQr.FlatStyle = FlatStyle.Flat;
+            _btnShowQr.FlatAppearance.BorderColor = green;
+            _btnShowQr.BackColor = surfaceVar;
+            _btnShowQr.ForeColor = green;
+            _btnShowQr.Font = new Font("Segoe UI", 8.5f, FontStyle.Bold);
+            _btnShowQr.Click += delegate { ShowQrLoginDialog(); };
 
             _btnCopyUrl = new Button();
             _btnCopyUrl.Text = "Copy URL";
-            _btnCopyUrl.Location = new Point(494, 98);
-            _btnCopyUrl.Size = new Size(96, 30);
+            _btnCopyUrl.Location = new Point(526, 98);
+            _btnCopyUrl.Size = new Size(86, 30);
             _btnCopyUrl.Anchor = AnchorStyles.Top | AnchorStyles.Right;
             _btnCopyUrl.FlatStyle = FlatStyle.Flat;
             _btnCopyUrl.FlatAppearance.BorderColor = cyan;
@@ -234,11 +662,11 @@ namespace LootStreamHost
 
             _lblMediaCount = new Label();
             _lblMediaCount.Text = "0 items";
-            _lblMediaCount.Font = new Font("Segoe UI", 9.5f, FontWeightBold());
+            _lblMediaCount.Font = new Font("Segoe UI", 9.5f, FontStyle.Bold);
             _lblMediaCount.ForeColor = purple;
             _lblMediaCount.TextAlign = ContentAlignment.MiddleRight;
-            _lblMediaCount.Location = new Point(596, 100);
-            _lblMediaCount.Size = new Size(92, 26);
+            _lblMediaCount.Location = new Point(618, 100);
+            _lblMediaCount.Size = new Size(90, 26);
             _lblMediaCount.Anchor = AnchorStyles.Top | AnchorStyles.Right;
 
             cfgCard.Controls.Add(lblName);
@@ -249,23 +677,25 @@ namespace LootStreamHost
             cfgCard.Controls.Add(_txtPin);
             cfgCard.Controls.Add(_btnToggleServer);
             cfgCard.Controls.Add(lblConnectHint);
+            cfgCard.Controls.Add(_lblQuickCode);
             cfgCard.Controls.Add(_lblLanUrl);
+            cfgCard.Controls.Add(_btnShowQr);
             cfgCard.Controls.Add(_btnCopyUrl);
             cfgCard.Controls.Add(_lblMediaCount);
 
             // Shared Folders Card
             Panel foldersCard = new Panel();
             foldersCard.Location = new Point(18, 174);
-            foldersCard.Size = new Size(706, 170);
+            foldersCard.Size = new Size(726, 170);
             foldersCard.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             foldersCard.BackColor = surface;
 
-            Label lblFolders = MakeLabel("Shared Media Folders (Videos, Movies, Shows, Music):", 14, 12, textPrimary);
-            lblFolders.Font = new Font("Segoe UI", 9.5f, FontWeightBold());
+            Label lblFolders = MakeLabel("Shared Media Folders (Movies, TV Shows, Music):", 14, 12, textPrimary);
+            lblFolders.Font = new Font("Segoe UI", 9.5f, FontStyle.Bold);
 
             _lstFolders = new ListBox();
             _lstFolders.Location = new Point(14, 38);
-            _lstFolders.Size = new Size(540, 116);
+            _lstFolders.Size = new Size(560, 116);
             _lstFolders.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom;
             _lstFolders.BackColor = surfaceVar;
             _lstFolders.ForeColor = textPrimary;
@@ -274,19 +704,19 @@ namespace LootStreamHost
 
             Button btnAddFolder = new Button();
             btnAddFolder.Text = "+ Add Folder";
-            btnAddFolder.Location = new Point(568, 38);
+            btnAddFolder.Location = new Point(588, 38);
             btnAddFolder.Size = new Size(122, 32);
             btnAddFolder.Anchor = AnchorStyles.Top | AnchorStyles.Right;
             btnAddFolder.FlatStyle = FlatStyle.Flat;
             btnAddFolder.FlatAppearance.BorderSize = 0;
             btnAddFolder.BackColor = green;
             btnAddFolder.ForeColor = bg;
-            btnAddFolder.Font = new Font("Segoe UI", 9f, FontWeightBold());
+            btnAddFolder.Font = new Font("Segoe UI", 9f, FontStyle.Bold);
             btnAddFolder.Click += delegate { AddFolder(); };
 
             Button btnRemoveFolder = new Button();
             btnRemoveFolder.Text = "Remove Selected";
-            btnRemoveFolder.Location = new Point(568, 78);
+            btnRemoveFolder.Location = new Point(588, 78);
             btnRemoveFolder.Size = new Size(122, 32);
             btnRemoveFolder.Anchor = AnchorStyles.Top | AnchorStyles.Right;
             btnRemoveFolder.FlatStyle = FlatStyle.Flat;
@@ -297,7 +727,7 @@ namespace LootStreamHost
 
             Button btnRescan = new Button();
             btnRescan.Text = "Rescan Library";
-            btnRescan.Location = new Point(568, 118);
+            btnRescan.Location = new Point(588, 118);
             btnRescan.Size = new Size(122, 32);
             btnRescan.Anchor = AnchorStyles.Top | AnchorStyles.Right;
             btnRescan.FlatStyle = FlatStyle.Flat;
@@ -316,7 +746,7 @@ namespace LootStreamHost
             Label lblLog = MakeLabel("Server & Streaming Activity Log:", 18, 356, textSecondary);
             _txtLog = new TextBox();
             _txtLog.Location = new Point(18, 378);
-            _txtLog.Size = new Size(706, 110);
+            _txtLog.Size = new Size(726, 130);
             _txtLog.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom;
             _txtLog.Multiline = true;
             _txtLog.ReadOnly = true;
@@ -341,9 +771,96 @@ namespace LootStreamHost
             };
         }
 
-        private static FontStyle FontWeightBold()
+        private void OpenMediaCenterInBrowser()
         {
-            return FontStyle.Bold;
+            string url = string.Format("http://127.0.0.1:{0}/", _state.Port);
+            try
+            {
+                string edge = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+                    @"Microsoft\Edge\Application\msedge.exe"
+                );
+                if (File.Exists(edge))
+                {
+                    Process.Start(edge, "--app=" + url);
+                    return;
+                }
+            }
+            catch { }
+
+            try
+            {
+                Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true });
+            }
+            catch { }
+        }
+
+        private void ShowQrLoginDialog()
+        {
+            Form dlg = new Form();
+            dlg.Text = "Easy Wi-Fi Android Login";
+            dlg.Size = new Size(380, 470);
+            dlg.FormBorderStyle = FormBorderStyle.FixedDialog;
+            dlg.MaximizeBox = false;
+            dlg.MinimizeBox = false;
+            dlg.StartPosition = FormStartPosition.CenterParent;
+            dlg.BackColor = Color.FromArgb(11, 15, 25);
+            dlg.ForeColor = Color.FromArgb(241, 245, 249);
+
+            PictureBox pic = new PictureBox();
+            pic.Size = new Size(240, 240);
+            pic.Location = new Point(62, 20);
+            pic.SizeMode = PictureBoxSizeMode.Zoom;
+            pic.BackColor = Color.White;
+
+            Label lblCode = new Label();
+            lblCode.Font = new Font("Consolas", 22f, FontStyle.Bold);
+            lblCode.ForeColor = Color.FromArgb(0, 255, 135);
+            lblCode.TextAlign = ContentAlignment.MiddleCenter;
+            lblCode.Location = new Point(20, 274);
+            lblCode.Size = new Size(324, 40);
+
+            Label lblInfo = new Label();
+            lblInfo.Text = "Scan this QR code or enter the 6-digit code\nin LootStream Android on the same Wi-Fi.";
+            lblInfo.Font = new Font("Segoe UI", 9.5f);
+            lblInfo.ForeColor = Color.FromArgb(148, 163, 184);
+            lblInfo.TextAlign = ContentAlignment.MiddleCenter;
+            lblInfo.Location = new Point(20, 320);
+            lblInfo.Size = new Size(324, 42);
+
+            Button btnNew = new Button();
+            btnNew.Text = "Generate New Code";
+            btnNew.Size = new Size(160, 34);
+            btnNew.Location = new Point(102, 376);
+            btnNew.FlatStyle = FlatStyle.Flat;
+            btnNew.FlatAppearance.BorderSize = 0;
+            btnNew.BackColor = Color.FromArgb(0, 229, 255);
+            btnNew.ForeColor = Color.FromArgb(11, 15, 25);
+            btnNew.Font = new Font("Segoe UI", 9.5f, FontStyle.Bold);
+
+            Action renderDialog = delegate
+            {
+                if (pic.Image != null) pic.Image.Dispose();
+                pic.Image = QrEncoder.RenderBitmap(GetQuickPairUri(), 6);
+                lblCode.Text = FormatSixDigitCode(_quickCode);
+            };
+            renderDialog();
+            btnNew.Click += delegate
+            {
+                RefreshQuickCode();
+                renderDialog();
+            };
+
+            dlg.FormClosed += delegate
+            {
+                if (pic.Image != null) pic.Image.Dispose();
+            };
+
+            dlg.Controls.Add(pic);
+            dlg.Controls.Add(lblCode);
+            dlg.Controls.Add(lblInfo);
+            dlg.Controls.Add(btnNew);
+            dlg.ShowDialog(this);
         }
 
         private static Label MakeLabel(string text, int x, int y, Color color)
@@ -377,52 +894,85 @@ namespace LootStreamHost
             }
         }
 
+        private string PickFolderDialogUiThread()
+        {
+            string chosen = null;
+            Action showAction = delegate
+            {
+                using (FolderBrowserDialog dlg = new FolderBrowserDialog())
+                {
+                    dlg.Description = "Select a folder containing movies, TV shows, videos, or music";
+                    if (dlg.ShowDialog() == DialogResult.OK && !string.IsNullOrEmpty(dlg.SelectedPath))
+                    {
+                        chosen = dlg.SelectedPath;
+                    }
+                }
+            };
+            if (this.InvokeRequired) this.Invoke(showAction);
+            else showAction();
+            return chosen;
+        }
+
         private void AddFolder()
         {
-            using (FolderBrowserDialog dlg = new FolderBrowserDialog())
+            string picked = PickFolderDialogUiThread();
+            if (!string.IsNullOrEmpty(picked))
             {
-                dlg.Description = "Select a folder containing movies, TV episodes, videos, or music";
-                if (dlg.ShowDialog() == DialogResult.OK && !string.IsNullOrEmpty(dlg.SelectedPath))
-                {
-                    lock (_syncLock)
-                    {
-                        if (!_state.Folders.Contains(dlg.SelectedPath))
-                        {
-                            _state.Folders.Add(dlg.SelectedPath);
-                        }
-                    }
-                    RefreshFolderList();
-                    SaveState();
-                    RescanLibrary();
-                }
+                AddFolderPath(picked);
             }
+        }
+
+        private bool AddFolderPath(string path)
+        {
+            if (string.IsNullOrEmpty(path) || !Directory.Exists(path)) return false;
+            string full = Path.GetFullPath(path.Trim());
+            lock (_syncLock)
+            {
+                if (!_state.Folders.Contains(full)) _state.Folders.Add(full);
+                SaveState();
+            }
+            RunOnUi(delegate { RefreshFolderList(); });
+            RescanLibrary();
+            AppendLog("Added media folder: " + full);
+            return true;
+        }
+
+        private void RemoveFolderPath(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return;
+            lock (_syncLock)
+            {
+                _state.Folders.Remove(path);
+                SaveState();
+            }
+            RunOnUi(delegate { RefreshFolderList(); });
+            RescanLibrary();
+            AppendLog("Removed media folder: " + path);
         }
 
         private void RemoveSelectedFolder()
         {
             if (_lstFolders.SelectedIndex >= 0)
             {
-                string folder = _lstFolders.SelectedItem.ToString();
-                lock (_syncLock)
-                {
-                    _state.Folders.Remove(folder);
-                }
-                RefreshFolderList();
-                SaveState();
-                RescanLibrary();
+                RemoveFolderPath(_lstFolders.SelectedItem.ToString());
             }
+        }
+
+        private void RunOnUi(Action action)
+        {
+            if (this.IsDisposed || !this.IsHandleCreated) return;
+            try
+            {
+                if (this.InvokeRequired) this.BeginInvoke(action);
+                else action();
+            }
+            catch { }
         }
 
         private void ToggleServer()
         {
-            if (_isRunning)
-            {
-                StopServer();
-            }
-            else
-            {
-                StartServer();
-            }
+            if (_isRunning) StopServer();
+            else StartServer();
         }
 
         private void StartServer()
@@ -456,7 +1006,6 @@ namespace LootStreamHost
                 }
                 catch
                 {
-                    // Fallback without URL ACL admin reservation: bind all local IPv4 addresses + localhost
                     _listener = new HttpListener();
                     _listener.Prefixes.Add(string.Format("http://localhost:{0}/", parsedPort));
                     _listener.Prefixes.Add(string.Format("http://127.0.0.1:{0}/", parsedPort));
@@ -471,6 +1020,7 @@ namespace LootStreamHost
                 _listenerThread = new Thread(ListenLoop);
                 _listenerThread.IsBackground = true;
                 _listenerThread.Start();
+                StartUdpDiscoveryResponder();
 
                 _lblStatusBadge.Text = "ONLINE";
                 _lblStatusBadge.ForeColor = Color.FromArgb(0, 255, 135);
@@ -479,6 +1029,12 @@ namespace LootStreamHost
                 _btnToggleServer.ForeColor = Color.White;
                 _lblLanUrl.Text = GetLanUrl();
                 AppendLog("Server started on " + _lblLanUrl.Text + " (" + _catalog.Count + " media items)");
+
+                if (!_openedBrowserOnce)
+                {
+                    _openedBrowserOnce = true;
+                    OpenMediaCenterInBrowser();
+                }
             }
             catch (Exception ex)
             {
@@ -489,9 +1045,77 @@ namespace LootStreamHost
             }
         }
 
+        private void StartUdpDiscoveryResponder()
+        {
+            try
+            {
+                _udpDiscovery = new UdpClient();
+                _udpDiscovery.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+                _udpDiscovery.Client.Bind(new IPEndPoint(IPAddress.Any, 8766));
+                _udpDiscovery.EnableBroadcast = true;
+                try
+                {
+                    _udpDiscovery.JoinMulticastGroup(IPAddress.Parse("239.255.87.66"));
+                }
+                catch { }
+
+                _udpThread = new Thread(delegate
+                {
+                    while (_isRunning && _udpDiscovery != null)
+                    {
+                        try
+                        {
+                            IPEndPoint remote = new IPEndPoint(IPAddress.Any, 0);
+                            byte[] data = _udpDiscovery.Receive(ref remote);
+                            string msg = Encoding.UTF8.GetString(data).Trim();
+                            if (!msg.StartsWith("LOOTSTREAM_DISCOVER", StringComparison.Ordinal)) continue;
+
+                            List<string> urls = new List<string>();
+                            foreach (string ip in GetAllLocalIpv4Addresses())
+                            {
+                                urls.Add(string.Format("http://{0}:{1}", ip, _state.Port));
+                            }
+                            if (urls.Count == 0) urls.Add(string.Format("http://127.0.0.1:{0}", _state.Port));
+
+                            Dictionary<string, object> resp = new Dictionary<string, object>();
+                            lock (_syncLock)
+                            {
+                                resp["service"] = "lootstream-host";
+                                resp["serverId"] = _state.ServerId;
+                                resp["serverName"] = _state.ServerName;
+                                resp["hostPlatform"] = "Windows";
+                                resp["port"] = _state.Port;
+                                resp["urls"] = urls;
+                                resp["requiresPin"] = !string.IsNullOrEmpty(_state.Pin);
+                                resp["quickCodeActive"] = true;
+                            }
+                            byte[] bytes = Encoding.UTF8.GetBytes(_json.Serialize(resp));
+                            _udpDiscovery.Send(bytes, bytes.Length, remote);
+                        }
+                        catch
+                        {
+                            if (!_isRunning) break;
+                        }
+                    }
+                });
+                _udpThread.IsBackground = true;
+                _udpThread.Start();
+            }
+            catch { }
+        }
+
         private void StopServer()
         {
             _isRunning = false;
+            try
+            {
+                if (_udpDiscovery != null)
+                {
+                    _udpDiscovery.Close();
+                    _udpDiscovery = null;
+                }
+            }
+            catch { }
             try
             {
                 if (_listener != null)
@@ -503,21 +1127,14 @@ namespace LootStreamHost
             }
             catch { }
 
-            if (!this.IsDisposed)
+            RunOnUi(delegate
             {
-                try
-                {
-                    this.BeginInvoke((Action)delegate
-                    {
-                        _lblStatusBadge.Text = "STOPPED";
-                        _lblStatusBadge.ForeColor = Color.FromArgb(148, 163, 184);
-                        _btnToggleServer.Text = "Start Server";
-                        _btnToggleServer.BackColor = Color.FromArgb(0, 229, 255);
-                        _btnToggleServer.ForeColor = Color.FromArgb(11, 15, 25);
-                    });
-                }
-                catch { }
-            }
+                _lblStatusBadge.Text = "STOPPED";
+                _lblStatusBadge.ForeColor = Color.FromArgb(148, 163, 184);
+                _btnToggleServer.Text = "Start Server";
+                _btnToggleServer.BackColor = Color.FromArgb(0, 229, 255);
+                _btnToggleServer.ForeColor = Color.FromArgb(11, 15, 25);
+            });
             AppendLog("Server stopped.");
         }
 
@@ -546,6 +1163,24 @@ namespace LootStreamHost
 
             try
             {
+                // Built-in Ampchor-inspired Media Center Web UI (embedded in .exe)
+                if (method == "GET" && (path == "/" || path == "/index.html"))
+                {
+                    ServeEmbeddedAsset(res, "index.html", "text/html; charset=utf-8");
+                    return;
+                }
+                if (method == "GET" && path == "/styles.css")
+                {
+                    ServeEmbeddedAsset(res, "styles.css", "text/css; charset=utf-8");
+                    return;
+                }
+                if (method == "GET" && path == "/app.js")
+                {
+                    ServeEmbeddedAsset(res, "app.js", "application/javascript; charset=utf-8");
+                    return;
+                }
+
+                // Shared LootStream API
                 if (method == "GET" && path == "/api/info")
                 {
                     Dictionary<string, object> info = new Dictionary<string, object>();
@@ -553,7 +1188,7 @@ namespace LootStreamHost
                     {
                         info["serverId"] = _state.ServerId;
                         info["serverName"] = _state.ServerName;
-                        info["version"] = "1.0.0";
+                        info["version"] = SelfInstaller.AppVersion;
                         info["hostPlatform"] = "Windows";
                         info["requiresPin"] = !string.IsNullOrEmpty(_state.Pin);
                         info["itemCount"] = _catalog.Count;
@@ -567,25 +1202,48 @@ namespace LootStreamHost
                     string body = ReadBody(req);
                     Dictionary<string, object> payload = ParseJsonObject(body);
                     string submittedPin = payload.ContainsKey("pin") && payload["pin"] != null ? payload["pin"].ToString().Trim() : "";
+                    string quickCode = payload.ContainsKey("quickCode") && payload["quickCode"] != null ? payload["quickCode"].ToString().Trim() : "";
                     string deviceName = payload.ContainsKey("deviceName") && payload["deviceName"] != null ? payload["deviceName"].ToString() : "Android";
 
                     Dictionary<string, object> result = new Dictionary<string, object>();
                     lock (_syncLock)
                     {
-                        if (!string.IsNullOrEmpty(_state.Pin) && !string.Equals(_state.Pin, submittedPin, StringComparison.Ordinal))
+                        string invalidReason = "";
+                        if (!string.IsNullOrEmpty(quickCode))
                         {
-                            AppendLog("Rejected pairing from " + deviceName + " (invalid PIN)");
-                            WriteJson(res, 401, new Dictionary<string, object> { { "error", "Incorrect pairing PIN" } });
+                            if (!string.Equals(_quickCode, quickCode, StringComparison.Ordinal))
+                            {
+                                invalidReason = "Incorrect 6-digit code";
+                            }
+                        }
+                        else if (!string.IsNullOrEmpty(_state.Pin) && !string.Equals(_state.Pin, submittedPin, StringComparison.Ordinal))
+                        {
+                            invalidReason = "Incorrect pairing PIN";
+                        }
+
+                        if (!string.IsNullOrEmpty(invalidReason))
+                        {
+                            AppendLog("Rejected pairing from " + deviceName + " (" + invalidReason + ")");
+                            WriteJson(res, 401, new Dictionary<string, object> { { "error", invalidReason } });
                             return;
                         }
                         string token = Guid.NewGuid().ToString("N");
                         if (!_state.ValidTokens.Contains(token)) _state.ValidTokens.Add(token);
+                        _state.PairedDevices.Add(new PairedDeviceInfo
+                        {
+                            deviceName = deviceName,
+                            pairedAt = ToUnixMs(DateTime.UtcNow)
+                        });
+                        if (_state.PairedDevices.Count > 25)
+                        {
+                            _state.PairedDevices.RemoveRange(0, _state.PairedDevices.Count - 25);
+                        }
                         SaveState();
 
                         result["token"] = token;
                         result["serverId"] = _state.ServerId;
                         result["serverName"] = _state.ServerName;
-                        result["version"] = "1.0.0";
+                        result["version"] = SelfInstaller.AppVersion;
                         result["hostPlatform"] = "Windows";
                     }
                     AppendLog("Paired Android device: " + deviceName);
@@ -601,41 +1259,13 @@ namespace LootStreamHost
                         return;
                     }
 
-                    List<Dictionary<string, object>> itemsOut = new List<Dictionary<string, object>>();
+                    List<Dictionary<string, object>> itemsOut = BuildPublicItems();
                     string serverId;
                     string serverName;
                     lock (_syncLock)
                     {
                         serverId = _state.ServerId;
                         serverName = _state.ServerName;
-                        foreach (MediaEntry entry in _catalog)
-                        {
-                            ItemProgress prog = _state.Progress.ContainsKey(entry.Id) ? _state.Progress[entry.Id] : null;
-                            Dictionary<string, object> d = new Dictionary<string, object>();
-                            d["id"] = entry.Id;
-                            d["title"] = entry.Title;
-                            d["subtitle"] = entry.Subtitle;
-                            d["overview"] = "Streamed directly from " + serverName;
-                            d["mediaType"] = entry.MediaType;
-                            d["streamUrl"] = "/api/stream/" + entry.Id;
-                            d["posterUrl"] = "";
-                            d["backdropUrl"] = "";
-                            d["durationMs"] = prog != null ? prog.DurationMs : 0L;
-                            d["playbackPositionMs"] = prog != null ? prog.PlaybackPositionMs : 0L;
-                            d["releaseYear"] = entry.ReleaseYear;
-                            d["genres"] = new string[] { entry.Subtitle };
-                            d["codecBadge"] = entry.CodecBadge;
-                            d["seriesName"] = entry.SeriesName;
-                            d["seasonNumber"] = entry.SeasonNumber;
-                            d["episodeNumber"] = entry.EpisodeNumber;
-                            d["isFavorite"] = prog != null && prog.IsFavorite;
-                            d["watchStatus"] = prog != null && !string.IsNullOrEmpty(prog.WatchStatus) ? prog.WatchStatus : "UNWATCHED";
-                            d["playCount"] = prog != null ? prog.PlayCount : 0;
-                            d["lastPlayedAt"] = prog != null ? prog.LastPlayedAt : 0L;
-                            d["addedAt"] = entry.AddedAt;
-                            d["fileSizeBytes"] = entry.FileSizeBytes;
-                            itemsOut.Add(d);
-                        }
                     }
 
                     Dictionary<string, object> libResp = new Dictionary<string, object>();
@@ -665,9 +1295,43 @@ namespace LootStreamHost
                     return;
                 }
 
+                if (method == "GET" && path.StartsWith("/api/artwork/"))
+                {
+                    string itemId = Uri.UnescapeDataString(path.Substring("/api/artwork/".Length));
+                    string kind = req.QueryString["kind"] ?? "poster";
+                    MediaEntry entry = null;
+                    lock (_syncLock)
+                    {
+                        if (_catalogById.ContainsKey(itemId)) entry = _catalogById[itemId];
+                    }
+                    if (entry == null)
+                    {
+                        res.StatusCode = 404;
+                        res.Close();
+                        return;
+                    }
+                    string artPath = kind == "backdrop" ? entry.BackdropPath : entry.PosterPath;
+                    if (string.IsNullOrEmpty(artPath)) artPath = !string.IsNullOrEmpty(entry.PosterPath) ? entry.PosterPath : entry.BackdropPath;
+                    if (string.IsNullOrEmpty(artPath) || !File.Exists(artPath))
+                    {
+                        res.StatusCode = 404;
+                        res.Close();
+                        return;
+                    }
+                    byte[] artBytes = File.ReadAllBytes(artPath);
+                    res.StatusCode = 200;
+                    res.ContentType = GetMimeType(Path.GetExtension(artPath));
+                    res.ContentLength64 = artBytes.Length;
+                    res.OutputStream.Write(artBytes, 0, artBytes.Length);
+                    res.OutputStream.Flush();
+                    res.Close();
+                    return;
+                }
+
                 if (method == "POST" && path.StartsWith("/api/items/"))
                 {
-                    if (!IsAuthorized(req))
+                    bool isLocal = req.RemoteEndPoint != null && IPAddress.IsLoopback(req.RemoteEndPoint.Address);
+                    if (!isLocal && !IsAuthorized(req))
                     {
                         WriteJson(res, 401, new Dictionary<string, object> { { "error", "Unauthorized" } });
                         return;
@@ -697,7 +1361,7 @@ namespace LootStreamHost
                             if (payload.ContainsKey("positionMs")) prog.PlaybackPositionMs = Convert.ToInt64(payload["positionMs"]);
                             if (payload.ContainsKey("durationMs")) prog.DurationMs = Convert.ToInt64(payload["durationMs"]);
                             if (payload.ContainsKey("watchStatus") && payload["watchStatus"] != null) prog.WatchStatus = payload["watchStatus"].ToString();
-                            prog.LastPlayedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                            prog.LastPlayedAt = ToUnixMs(DateTime.UtcNow);
                         }
                         else if (action == "favorite")
                         {
@@ -711,6 +1375,171 @@ namespace LootStreamHost
                         SaveState();
                     }
                     WriteJson(res, 200, new Dictionary<string, object> { { "ok", true } });
+                    return;
+                }
+
+                // Host Web UI Management Endpoints
+                if (method == "GET" && path == "/api/host/state")
+                {
+                    List<Dictionary<string, object>> items = BuildPublicItems();
+                    List<string> lanUrls = new List<string>();
+                    foreach (string ip in GetAllLocalIpv4Addresses())
+                    {
+                        lanUrls.Add(string.Format("http://{0}:{1}", ip, _state.Port));
+                    }
+                    if (lanUrls.Count == 0) lanUrls.Add(string.Format("http://127.0.0.1:{0}", _state.Port));
+
+                    Dictionary<string, object> stateResp = new Dictionary<string, object>();
+                    string pairUri = GetQuickPairUri();
+                    lock (_syncLock)
+                    {
+                        stateResp["serverId"] = _state.ServerId;
+                        stateResp["serverName"] = _state.ServerName;
+                        stateResp["hostPlatform"] = "Windows";
+                        stateResp["port"] = _state.Port;
+                        stateResp["requiresPin"] = !string.IsNullOrEmpty(_state.Pin);
+                        stateResp["pin"] = _state.Pin ?? "";
+                        stateResp["quickCode"] = _quickCode;
+                        stateResp["quickPairUri"] = pairUri;
+                        stateResp["lanUrls"] = lanUrls;
+                        stateResp["folders"] = new List<string>(_state.Folders);
+                        stateResp["pairedDevices"] = new List<PairedDeviceInfo>(_state.PairedDevices);
+                        stateResp["activityLog"] = new List<string>(_activityLog);
+                        stateResp["ffprobeAvailable"] = false;
+                        stateResp["items"] = items;
+                    }
+                    WriteJson(res, 200, stateResp);
+                    return;
+                }
+
+                if (method == "GET" && path == "/api/host/browse-dirs")
+                {
+                    string rawDir = req.QueryString["path"];
+                    string userHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                    string target = string.IsNullOrEmpty(rawDir) ? userHome : rawDir;
+                    List<Dictionary<string, string>> dirs = new List<Dictionary<string, string>>();
+                    string parentPath = null;
+
+                    if (string.Equals(target, "__DRIVES__", StringComparison.Ordinal))
+                    {
+                        foreach (DriveInfo d in DriveInfo.GetDrives())
+                        {
+                            if (d.IsReady)
+                            {
+                                dirs.Add(new Dictionary<string, string> { { "name", d.Name }, { "path", d.Name } });
+                            }
+                        }
+                    }
+                    else
+                    {
+                        if (!Directory.Exists(target)) target = userHome;
+                        try
+                        {
+                            string[] subdirs = Directory.GetDirectories(target);
+                            Array.Sort(subdirs, StringComparer.OrdinalIgnoreCase);
+                            foreach (string sd in subdirs)
+                            {
+                                DirectoryInfo di = new DirectoryInfo(sd);
+                                if ((di.Attributes & FileAttributes.Hidden) != 0) continue;
+                                dirs.Add(new Dictionary<string, string> { { "name", di.Name }, { "path", di.FullName } });
+                                if (dirs.Count >= 150) break;
+                            }
+                        }
+                        catch { }
+                        DirectoryInfo parent = Directory.GetParent(target);
+                        parentPath = parent != null ? parent.FullName : "__DRIVES__";
+                    }
+
+                    WriteJson(res, 200, new Dictionary<string, object>
+                    {
+                        { "currentPath", target },
+                        { "parentPath", parentPath },
+                        { "directories", dirs }
+                    });
+                    return;
+                }
+
+                if (method == "POST" && path == "/api/host/folders")
+                {
+                    Dictionary<string, object> payload = ParseJsonObject(ReadBody(req));
+                    string folder = payload.ContainsKey("path") && payload["path"] != null ? payload["path"].ToString().Trim() : "";
+                    bool ok = AddFolderPath(folder);
+                    WriteJson(res, ok ? 200 : 400, new Dictionary<string, object>
+                    {
+                        { "ok", ok },
+                        { "message", ok ? folder : "Directory does not exist: " + folder }
+                    });
+                    return;
+                }
+
+                if (method == "POST" && path == "/api/host/folders/remove")
+                {
+                    Dictionary<string, object> payload = ParseJsonObject(ReadBody(req));
+                    string folder = payload.ContainsKey("path") && payload["path"] != null ? payload["path"].ToString().Trim() : "";
+                    RemoveFolderPath(folder);
+                    WriteJson(res, 200, new Dictionary<string, object> { { "ok", true } });
+                    return;
+                }
+
+                if (method == "POST" && path == "/api/host/rescan")
+                {
+                    RescanLibrary();
+                    WriteJson(res, 200, new Dictionary<string, object>
+                    {
+                        { "ok", true },
+                        { "itemCount", _catalog.Count }
+                    });
+                    return;
+                }
+
+                if (method == "POST" && path == "/api/host/config")
+                {
+                    Dictionary<string, object> payload = ParseJsonObject(ReadBody(req));
+                    lock (_syncLock)
+                    {
+                        if (payload.ContainsKey("serverName") && payload["serverName"] != null && !string.IsNullOrEmpty(payload["serverName"].ToString().Trim()))
+                        {
+                            _state.ServerName = payload["serverName"].ToString().Trim();
+                        }
+                        if (payload.ContainsKey("pin") && payload["pin"] != null)
+                        {
+                            _state.Pin = payload["pin"].ToString().Trim();
+                        }
+                        SaveState();
+                    }
+                    RunOnUi(delegate
+                    {
+                        _txtServerName.Text = _state.ServerName;
+                        _txtPin.Text = _state.Pin;
+                    });
+                    AppendLog("Updated host configuration.");
+                    WriteJson(res, 200, new Dictionary<string, object> { { "ok", true } });
+                    return;
+                }
+
+                if (method == "POST" && path == "/api/host/quick-code/refresh")
+                {
+                    RefreshQuickCode();
+                    WriteJson(res, 200, new Dictionary<string, object>
+                    {
+                        { "ok", true },
+                        { "quickCode", _quickCode },
+                        { "quickPairUri", GetQuickPairUri() }
+                    });
+                    return;
+                }
+
+                if (method == "POST" && path == "/api/host/pick-folder")
+                {
+                    string picked = PickFolderDialogUiThread();
+                    if (!string.IsNullOrEmpty(picked) && AddFolderPath(picked))
+                    {
+                        WriteJson(res, 200, new Dictionary<string, object> { { "ok", true }, { "path", picked } });
+                    }
+                    else
+                    {
+                        WriteJson(res, 200, new Dictionary<string, object> { { "ok", false }, { "cancelled", true } });
+                    }
                     return;
                 }
 
@@ -729,14 +1558,91 @@ namespace LootStreamHost
             }
         }
 
+        private List<Dictionary<string, object>> BuildPublicItems()
+        {
+            List<Dictionary<string, object>> itemsOut = new List<Dictionary<string, object>>();
+            lock (_syncLock)
+            {
+                string serverName = _state.ServerName;
+                foreach (MediaEntry entry in _catalog)
+                {
+                    ItemProgress prog = _state.Progress.ContainsKey(entry.Id) ? _state.Progress[entry.Id] : null;
+                    Dictionary<string, object> d = new Dictionary<string, object>();
+                    d["id"] = entry.Id;
+                    d["title"] = entry.Title;
+                    d["subtitle"] = entry.Subtitle;
+                    d["overview"] = "Streamed directly from " + serverName;
+                    d["mediaType"] = entry.MediaType;
+                    d["streamUrl"] = "/api/stream/" + entry.Id;
+                    d["posterUrl"] = !string.IsNullOrEmpty(entry.PosterPath) ? "/api/artwork/" + entry.Id + "?kind=poster" : "";
+                    d["backdropUrl"] = !string.IsNullOrEmpty(entry.BackdropPath) ? "/api/artwork/" + entry.Id + "?kind=backdrop" : "";
+                    d["durationMs"] = prog != null ? prog.DurationMs : 0L;
+                    d["playbackPositionMs"] = prog != null ? prog.PlaybackPositionMs : 0L;
+                    d["releaseYear"] = entry.ReleaseYear;
+                    d["genres"] = new string[] { entry.Subtitle };
+                    d["codecBadge"] = entry.CodecBadge;
+                    d["seriesName"] = entry.SeriesName;
+                    d["seasonNumber"] = entry.SeasonNumber;
+                    d["episodeNumber"] = entry.EpisodeNumber;
+                    d["isFavorite"] = prog != null && prog.IsFavorite;
+                    d["watchStatus"] = prog != null && !string.IsNullOrEmpty(prog.WatchStatus) ? prog.WatchStatus : "UNWATCHED";
+                    d["playCount"] = prog != null ? prog.PlayCount : 0;
+                    d["lastPlayedAt"] = prog != null ? prog.LastPlayedAt : 0L;
+                    d["addedAt"] = entry.AddedAt;
+                    d["fileSizeBytes"] = entry.FileSizeBytes;
+                    itemsOut.Add(d);
+                }
+            }
+            return itemsOut;
+        }
+
+        private static void ServeEmbeddedAsset(HttpListenerResponse res, string assetName, string contentType)
+        {
+            Assembly asm = Assembly.GetExecutingAssembly();
+            Stream stream = asm.GetManifestResourceStream(assetName);
+            if (stream == null)
+            {
+                foreach (string resName in asm.GetManifestResourceNames())
+                {
+                    if (resName.EndsWith("." + assetName, StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(resName, assetName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        stream = asm.GetManifestResourceStream(resName);
+                        break;
+                    }
+                }
+            }
+
+            if (stream == null)
+            {
+                byte[] fallback = Encoding.UTF8.GetBytes("<html><body><h1>LootStream Windows Host</h1><p>Embedded Web UI asset missing: " + assetName + "</p></body></html>");
+                res.StatusCode = 404;
+                res.ContentType = "text/html; charset=utf-8";
+                res.ContentLength64 = fallback.Length;
+                res.OutputStream.Write(fallback, 0, fallback.Length);
+                res.Close();
+                return;
+            }
+
+            using (stream)
+            using (MemoryStream ms = new MemoryStream())
+            {
+                stream.CopyTo(ms);
+                byte[] bytes = ms.ToArray();
+                res.StatusCode = 200;
+                res.ContentType = contentType;
+                res.ContentLength64 = bytes.Length;
+                res.OutputStream.Write(bytes, 0, bytes.Length);
+                res.OutputStream.Flush();
+                res.Close();
+            }
+        }
+
         private bool IsAuthorized(HttpListenerRequest req)
         {
             lock (_syncLock)
             {
-                if (string.IsNullOrEmpty(_state.Pin) && _state.ValidTokens.Count == 0)
-                {
-                    return true;
-                }
+                if (string.IsNullOrEmpty(_state.Pin) && _state.ValidTokens.Count == 0) return true;
                 string auth = req.Headers["Authorization"];
                 if (!string.IsNullOrEmpty(auth) && auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
                 {
@@ -825,6 +1731,48 @@ namespace LootStreamHost
             res.Close();
         }
 
+        private static void FindLocalArtwork(string filePath, out string posterPath, out string backdropPath)
+        {
+            posterPath = null;
+            backdropPath = null;
+            string dir = Path.GetDirectoryName(filePath);
+            if (string.IsNullOrEmpty(dir)) return;
+            string stem = Path.GetFileNameWithoutExtension(filePath);
+
+            string[] posterCandidates = new string[]
+            {
+                stem + ".jpg", stem + ".png", stem + "-poster.jpg", stem + "-poster.png",
+                "poster.jpg", "poster.png", "cover.jpg", "cover.png", "folder.jpg", "folder.png", "album.jpg", "front.jpg"
+            };
+            foreach (string c in posterCandidates)
+            {
+                string full = Path.Combine(dir, c);
+                if (File.Exists(full)) { posterPath = full; break; }
+            }
+            if (posterPath == null)
+            {
+                DirectoryInfo parent = Directory.GetParent(dir);
+                if (parent != null)
+                {
+                    foreach (string c in new string[] { "poster.jpg", "poster.png", "cover.jpg", "folder.jpg" })
+                    {
+                        string full = Path.Combine(parent.FullName, c);
+                        if (File.Exists(full)) { posterPath = full; break; }
+                    }
+                }
+            }
+
+            string[] backdropCandidates = new string[]
+            {
+                stem + "-fanart.jpg", stem + "-backdrop.jpg", "backdrop.jpg", "backdrop.png", "fanart.jpg", "fanart.png"
+            };
+            foreach (string c in backdropCandidates)
+            {
+                string full = Path.Combine(dir, c);
+                if (File.Exists(full)) { backdropPath = full; break; }
+            }
+        }
+
         private void RescanLibrary()
         {
             List<string> foldersSnapshot;
@@ -842,6 +1790,7 @@ namespace LootStreamHost
                 try
                 {
                     string[] files = Directory.GetFiles(folder, "*.*", SearchOption.AllDirectories);
+                    Array.Sort(files, StringComparer.OrdinalIgnoreCase);
                     foreach (string file in files)
                     {
                         string ext = Path.GetExtension(file);
@@ -874,18 +1823,31 @@ namespace LootStreamHost
                             season = int.Parse(epMatch.Groups[2].Value);
                             episode = int.Parse(epMatch.Groups[3].Value);
                         }
-                        else if (isVideo && year != null)
+                        else if (isVideo)
                         {
-                            mediaType = "MOVIE";
+                            string lowerPath = file.ToLowerInvariant();
+                            if (lowerPath.Contains(@"\tv\") || lowerPath.Contains(@"\shows\") || lowerPath.Contains(@"\series\") || lowerPath.Contains(@"\anime\"))
+                            {
+                                mediaType = "SERIES";
+                            }
+                            else
+                            {
+                                mediaType = "MOVIE";
+                            }
                         }
 
                         string cleanTitle = Regex.Replace(rawName, @"[._]+", " ").Trim();
                         string parentName = fi.Directory != null ? fi.Directory.Name : "Windows PC";
+                        string posterPath;
+                        string backdropPath;
+                        FindLocalArtwork(file, out posterPath, out backdropPath);
 
                         MediaEntry entry = new MediaEntry
                         {
                             Id = id,
                             FilePath = file,
+                            PosterPath = posterPath ?? "",
+                            BackdropPath = backdropPath ?? "",
                             Title = cleanTitle,
                             Subtitle = !string.IsNullOrEmpty(seriesName) ? seriesName : parentName,
                             MediaType = mediaType,
@@ -895,7 +1857,7 @@ namespace LootStreamHost
                             SeasonNumber = season,
                             EpisodeNumber = episode,
                             FileSizeBytes = fi.Length,
-                            AddedAt = new DateTimeOffset(fi.LastWriteTimeUtc).ToUnixTimeMilliseconds()
+                            AddedAt = ToUnixMs(fi.LastWriteTimeUtc)
                         };
                         scanned.Add(entry);
                         byId[id] = entry;
@@ -912,8 +1874,15 @@ namespace LootStreamHost
                 _catalog = scanned;
                 _catalogById = byId;
             }
-            _lblMediaCount.Text = scanned.Count + " items";
+            RunOnUi(delegate { _lblMediaCount.Text = scanned.Count + " items"; });
             AppendLog("Library scan complete: " + scanned.Count + " playable files found.");
+        }
+
+        private static readonly DateTime UnixEpochUtc = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        private static long ToUnixMs(DateTime utcTime)
+        {
+            return (long)(utcTime.ToUniversalTime() - UnixEpochUtc).TotalMilliseconds;
         }
 
         private static string ComputeShortHash(string input)
@@ -938,12 +1907,18 @@ namespace LootStreamHost
                 case ".mov": return "video/quicktime";
                 case ".avi": return "video/x-msvideo";
                 case ".ts": return "video/mp2t";
+                case ".ogv": return "video/ogg";
                 case ".mp3": return "audio/mpeg";
                 case ".flac": return "audio/flac";
                 case ".wav": return "audio/wav";
                 case ".m4a":
                 case ".aac": return "audio/mp4";
                 case ".ogg": return "audio/ogg";
+                case ".opus": return "audio/opus";
+                case ".jpg":
+                case ".jpeg": return "image/jpeg";
+                case ".png": return "image/png";
+                case ".webp": return "image/webp";
                 default: return "application/octet-stream";
             }
         }
@@ -1038,27 +2013,455 @@ namespace LootStreamHost
 
         private void AppendLog(string message)
         {
-            string line = string.Format("[{0:HH:mm:ss}] {1}{2}", DateTime.Now, message, Environment.NewLine);
-            if (this.IsDisposed || !this.IsHandleCreated) return;
-            try
+            string line = string.Format("[{0:HH:mm:ss}] {1}", DateTime.Now, message);
+            lock (_syncLock)
             {
-                this.BeginInvoke((Action)delegate
-                {
-                    if (_txtLog != null && !_txtLog.IsDisposed)
-                    {
-                        _txtLog.AppendText(line);
-                    }
-                });
+                _activityLog.Add(line);
+                if (_activityLog.Count > 120) _activityLog.RemoveAt(0);
             }
-            catch { }
+            RunOnUi(delegate
+            {
+                if (_txtLog != null && !_txtLog.IsDisposed)
+                {
+                    _txtLog.AppendText(line + Environment.NewLine);
+                }
+            });
         }
 
         [STAThread]
-        public static void Main()
+        public static void Main(string[] args)
         {
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
+            if (!SelfInstaller.HandleInstallerArgsOrPrompt(args))
+            {
+                return;
+            }
             Application.Run(new MainForm());
+        }
+    }
+
+    internal static class QrEncoder
+    {
+        private sealed class QrSpec
+        {
+            public readonly int Size;
+            public readonly int DataCw;
+            public readonly int EccPerBlock;
+            public readonly int G1Blocks;
+            public readonly int G1Data;
+            public readonly int G2Blocks;
+            public readonly int G2Data;
+            public readonly int[] Align;
+
+            public QrSpec(int size, int dataCw, int eccPerBlock, int g1Blocks, int g1Data, int g2Blocks, int g2Data, int[] align)
+            {
+                Size = size;
+                DataCw = dataCw;
+                EccPerBlock = eccPerBlock;
+                G1Blocks = g1Blocks;
+                G1Data = g1Data;
+                G2Blocks = g2Blocks;
+                G2Data = g2Data;
+                Align = align;
+            }
+        }
+
+        private static readonly QrSpec[] SpecsM = new QrSpec[]
+        {
+            null,
+            new QrSpec(21, 16, 10, 1, 16, 0, 0, new int[0]),
+            new QrSpec(25, 28, 16, 1, 28, 0, 0, new int[] { 6, 18 }),
+            new QrSpec(29, 44, 26, 1, 44, 0, 0, new int[] { 6, 22 }),
+            new QrSpec(33, 64, 18, 2, 32, 0, 0, new int[] { 6, 26 }),
+            new QrSpec(37, 86, 24, 2, 43, 0, 0, new int[] { 6, 30 }),
+            new QrSpec(41, 108, 16, 4, 27, 0, 0, new int[] { 6, 34 }),
+            new QrSpec(45, 124, 18, 4, 31, 0, 0, new int[] { 6, 22, 38 }),
+            new QrSpec(49, 154, 22, 2, 38, 2, 39, new int[] { 6, 24, 42 }),
+            new QrSpec(53, 182, 22, 3, 36, 2, 37, new int[] { 6, 26, 46 })
+        };
+
+        private static readonly byte[] GfExp = new byte[512];
+        private static readonly byte[] GfLog = new byte[256];
+
+        static QrEncoder()
+        {
+            int x = 1;
+            for (int i = 0; i < 255; i++)
+            {
+                GfExp[i] = (byte)x;
+                GfLog[x] = (byte)i;
+                x <<= 1;
+                if ((x & 0x100) != 0) x ^= 0x11d;
+            }
+            for (int i = 255; i < 512; i++)
+            {
+                GfExp[i] = GfExp[i - 255];
+            }
+        }
+
+        private static byte GfMul(byte a, byte b)
+        {
+            if (a == 0 || b == 0) return 0;
+            return GfExp[GfLog[a] + GfLog[b]];
+        }
+
+        private static byte[] RsGenerator(int deg)
+        {
+            byte[] poly = new byte[] { 1 };
+            for (int i = 0; i < deg; i++)
+            {
+                byte[] next = new byte[poly.Length + 1];
+                byte factor = GfExp[i];
+                for (int j = 0; j < poly.Length; j++)
+                {
+                    next[j] ^= poly[j];
+                    next[j + 1] ^= GfMul(poly[j], factor);
+                }
+                poly = next;
+            }
+            return poly;
+        }
+
+        private static byte[] RsRemainder(byte[] data, int eccLen)
+        {
+            byte[] gen = RsGenerator(eccLen);
+            byte[] res = new byte[data.Length + eccLen];
+            Array.Copy(data, 0, res, 0, data.Length);
+            for (int i = 0; i < data.Length; i++)
+            {
+                byte coef = res[i];
+                if (coef != 0)
+                {
+                    for (int j = 0; j < gen.Length; j++)
+                    {
+                        res[i + j] ^= GfMul(gen[j], coef);
+                    }
+                }
+            }
+            byte[] ecc = new byte[eccLen];
+            Array.Copy(res, data.Length, ecc, 0, eccLen);
+            return ecc;
+        }
+
+        private static void PushBits(List<int> bits, int val, int len)
+        {
+            for (int i = len - 1; i >= 0; i--)
+            {
+                bits.Add((val >> i) & 1);
+            }
+        }
+
+        public static bool[,] BuildMatrix(string text)
+        {
+            byte[] raw = Encoding.UTF8.GetBytes(text ?? "");
+            int ver = 1;
+            while (ver < SpecsM.Length && raw.Length + 2 > SpecsM[ver].DataCw)
+            {
+                ver++;
+            }
+            if (ver >= SpecsM.Length) ver = SpecsM.Length - 1;
+            QrSpec spec = SpecsM[ver];
+            int payloadLen = Math.Min(raw.Length, spec.DataCw - 2);
+
+            List<int> bits = new List<int>();
+            PushBits(bits, 0x4, 4); // Byte mode indicator
+            PushBits(bits, payloadLen, 8);
+            for (int i = 0; i < payloadLen; i++)
+            {
+                PushBits(bits, raw[i], 8);
+            }
+            int capBits = spec.DataCw * 8;
+            PushBits(bits, 0, Math.Min(4, capBits - bits.Count));
+            while (bits.Count % 8 != 0) bits.Add(0);
+
+            List<byte> dataCw = new List<byte>();
+            for (int i = 0; i < bits.Count; i += 8)
+            {
+                int v = 0;
+                for (int j = 0; j < 8; j++)
+                {
+                    v = (v << 1) | bits[i + j];
+                }
+                dataCw.Add((byte)v);
+            }
+            byte[] pads = new byte[] { 0xec, 0x11 };
+            int pi = 0;
+            while (dataCw.Count < spec.DataCw)
+            {
+                dataCw.Add(pads[pi % 2]);
+                pi++;
+            }
+
+            List<byte[]> blocks = new List<byte[]>();
+            List<byte[]> eccBlocks = new List<byte[]>();
+            int offset = 0;
+            for (int b = 0; b < spec.G1Blocks; b++)
+            {
+                byte[] slice = new byte[spec.G1Data];
+                dataCw.CopyTo(offset, slice, 0, spec.G1Data);
+                offset += spec.G1Data;
+                blocks.Add(slice);
+                eccBlocks.Add(RsRemainder(slice, spec.EccPerBlock));
+            }
+            for (int b = 0; b < spec.G2Blocks; b++)
+            {
+                byte[] slice = new byte[spec.G2Data];
+                dataCw.CopyTo(offset, slice, 0, spec.G2Data);
+                offset += spec.G2Data;
+                blocks.Add(slice);
+                eccBlocks.Add(RsRemainder(slice, spec.EccPerBlock));
+            }
+
+            List<byte> interleaved = new List<byte>();
+            int maxDataLen = Math.Max(spec.G1Data, spec.G2Data);
+            for (int i = 0; i < maxDataLen; i++)
+            {
+                for (int b = 0; b < blocks.Count; b++)
+                {
+                    if (i < blocks[b].Length) interleaved.Add(blocks[b][i]);
+                }
+            }
+            for (int i = 0; i < spec.EccPerBlock; i++)
+            {
+                for (int b = 0; b < eccBlocks.Count; b++)
+                {
+                    if (i < eccBlocks[b].Length) interleaved.Add(eccBlocks[b][i]);
+                }
+            }
+
+            int n = spec.Size;
+            bool[,] mod = new bool[n, n];
+            bool[,] isFunc = new bool[n, n];
+
+            Action<int, int, bool> setFn = delegate(int r, int c, bool val)
+            {
+                if (r >= 0 && r < n && c >= 0 && c < n)
+                {
+                    mod[r, c] = val;
+                    isFunc[r, c] = true;
+                }
+            };
+
+            Action<int, int> drawFinder = delegate(int top, int left)
+            {
+                for (int dr = -1; dr <= 7; dr++)
+                {
+                    for (int dc = -1; dc <= 7; dc++)
+                    {
+                        int r = top + dr;
+                        int c = left + dc;
+                        if (r < 0 || r >= n || c < 0 || c >= n) continue;
+                        bool on = dr >= 0 && dr <= 6 && dc >= 0 && dc <= 6 &&
+                                  (dr == 0 || dr == 6 || dc == 0 || dc == 6 || (dr >= 2 && dr <= 4 && dc >= 2 && dc <= 4));
+                        setFn(r, c, on);
+                    }
+                }
+            };
+
+            drawFinder(0, 0);
+            drawFinder(0, n - 7);
+            drawFinder(n - 7, 0);
+
+            for (int i = 8; i < n - 8; i++)
+            {
+                setFn(6, i, i % 2 == 0);
+                setFn(i, 6, i % 2 == 0);
+            }
+
+            for (int ri = 0; ri < spec.Align.Length; ri++)
+            {
+                int r0 = spec.Align[ri];
+                for (int ci = 0; ci < spec.Align.Length; ci++)
+                {
+                    int c0 = spec.Align[ci];
+                    if (isFunc[r0, c0]) continue;
+                    for (int dr = -2; dr <= 2; dr++)
+                    {
+                        for (int dc = -2; dc <= 2; dc++)
+                        {
+                            setFn(r0 + dr, c0 + dc, Math.Max(Math.Abs(dr), Math.Abs(dc)) != 1);
+                        }
+                    }
+                }
+            }
+
+            for (int i = 0; i < 9; i++)
+            {
+                if (i != 6)
+                {
+                    isFunc[8, i] = true;
+                    isFunc[i, 8] = true;
+                }
+            }
+            for (int i = 0; i < 8; i++)
+            {
+                isFunc[8, n - 1 - i] = true;
+                isFunc[n - 1 - i, 8] = true;
+            }
+            setFn(n - 8, 8, true);
+
+            if (ver >= 7)
+            {
+                int rem = ver;
+                for (int i = 0; i < 12; i++) rem = (rem << 1) ^ ((rem >> 11) * 0x1f25);
+                int verBits = (ver << 12) | rem;
+                for (int i = 0; i < 18; i++)
+                {
+                    bool bit = ((verBits >> i) & 1) == 1;
+                    int a = i / 3;
+                    int b = (n - 11) + (i % 3);
+                    setFn(a, b, bit);
+                    setFn(b, a, bit);
+                }
+            }
+
+            List<bool> codeBits = new List<bool>(interleaved.Count * 8);
+            for (int i = 0; i < interleaved.Count; i++)
+            {
+                byte cw = interleaved[i];
+                for (int b = 7; b >= 0; b--)
+                {
+                    codeBits.Add(((cw >> b) & 1) == 1);
+                }
+            }
+
+            int bitIdx = 0;
+            for (int right = n - 1; right >= 1; right -= 2)
+            {
+                if (right == 6) right = 5;
+                for (int vert = 0; vert < n; vert++)
+                {
+                    for (int j = 0; j < 2; j++)
+                    {
+                        int c = right - j;
+                        bool upward = ((right + 1) & 2) == 0;
+                        int r = upward ? n - 1 - vert : vert;
+                        if (!isFunc[r, c] && bitIdx < codeBits.Count)
+                        {
+                            mod[r, c] = codeBits[bitIdx++];
+                        }
+                    }
+                }
+            }
+
+            bool[,] best = ApplyMaskAndFormat(mod, isFunc, n, 0);
+            int bestPen = ScorePenalty(best, n);
+            for (int mid = 1; mid < 8; mid++)
+            {
+                bool[,] cand = ApplyMaskAndFormat(mod, isFunc, n, mid);
+                int pen = ScorePenalty(cand, n);
+                if (pen < bestPen)
+                {
+                    bestPen = pen;
+                    best = cand;
+                }
+            }
+            return best;
+        }
+
+        private static bool MaskMatch(int maskId, int r, int c)
+        {
+            switch (maskId)
+            {
+                case 0: return (r + c) % 2 == 0;
+                case 1: return r % 2 == 0;
+                case 2: return c % 3 == 0;
+                case 3: return (r + c) % 3 == 0;
+                case 4: return ((r / 2) + (c / 3)) % 2 == 0;
+                case 5: return ((r * c) % 2) + ((r * c) % 3) == 0;
+                case 6: return (((r * c) % 2) + ((r * c) % 3)) % 2 == 0;
+                default: return (((r + c) % 2) + ((r * c) % 3)) % 2 == 0;
+            }
+        }
+
+        private static bool[,] ApplyMaskAndFormat(bool[,] mod, bool[,] isFunc, int n, int maskId)
+        {
+            bool[,] m = new bool[n, n];
+            for (int r = 0; r < n; r++)
+            {
+                for (int c = 0; c < n; c++)
+                {
+                    bool v = mod[r, c];
+                    if (!isFunc[r, c] && MaskMatch(maskId, r, c)) v = !v;
+                    m[r, c] = v;
+                }
+            }
+
+            int data5 = maskId; // ECC Level M (00) << 3 | maskId
+            int rem = data5;
+            for (int i = 0; i < 10; i++) rem = (rem << 1) ^ ((rem >> 9) * 0x537);
+            int fmt = ((data5 << 10) | rem) ^ 0x5412;
+
+            for (int i = 0; i < 6; i++) m[8, i] = ((fmt >> (14 - i)) & 1) == 1;
+            m[8, 7] = ((fmt >> 8) & 1) == 1;
+            m[8, 8] = ((fmt >> 7) & 1) == 1;
+            m[7, 8] = ((fmt >> 6) & 1) == 1;
+            for (int i = 0; i < 6; i++) m[i, 8] = ((fmt >> i) & 1) == 1;
+            for (int i = 0; i < 8; i++) m[8, n - 1 - i] = ((fmt >> i) & 1) == 1;
+            for (int i = 8; i < 15; i++) m[n - 15 + i, 8] = ((fmt >> i) & 1) == 1;
+            return m;
+        }
+
+        private static int ScorePenalty(bool[,] m, int n)
+        {
+            int pen = 0;
+            for (int r = 0; r < n; r++)
+            {
+                int run = 1;
+                for (int c = 1; c < n; c++)
+                {
+                    if (m[r, c] == m[r, c - 1]) run++;
+                    else { if (run >= 5) pen += run - 2; run = 1; }
+                }
+                if (run >= 5) pen += run - 2;
+            }
+            for (int c = 0; c < n; c++)
+            {
+                int run = 1;
+                for (int r = 1; r < n; r++)
+                {
+                    if (m[r, c] == m[r - 1, c]) run++;
+                    else { if (run >= 5) pen += run - 2; run = 1; }
+                }
+                if (run >= 5) pen += run - 2;
+            }
+            for (int r = 0; r < n - 1; r++)
+            {
+                for (int c = 0; c < n - 1; c++)
+                {
+                    if (m[r, c] == m[r, c + 1] && m[r, c] == m[r + 1, c] && m[r, c] == m[r + 1, c + 1]) pen += 3;
+                }
+            }
+            return pen;
+        }
+
+        public static Bitmap RenderBitmap(string text, int scale)
+        {
+            if (scale < 1) scale = 4;
+            bool[,] matrix = BuildMatrix(text);
+            int n = matrix.GetLength(0);
+            int quiet = 2;
+            int total = (n + quiet * 2) * scale;
+            Bitmap bmp = new Bitmap(total, total);
+            using (Graphics g = Graphics.FromImage(bmp))
+            {
+                g.Clear(Color.White);
+                using (SolidBrush dark = new SolidBrush(Color.FromArgb(11, 15, 25)))
+                {
+                    for (int r = 0; r < n; r++)
+                    {
+                        for (int c = 0; c < n; c++)
+                        {
+                            if (matrix[r, c])
+                            {
+                                g.FillRectangle(dark, (c + quiet) * scale, (r + quiet) * scale, scale, scale);
+                            }
+                        }
+                    }
+                }
+            }
+            return bmp;
         }
     }
 }

@@ -167,4 +167,46 @@ class ExampleUnitTest {
         assertEquals("https://example.com/live.m3u8", parsed.items.first().streamUrl)
         assertTrue(parsed.items.first().isFavorite)
     }
+
+    @Test
+    fun parsePairQrPayload_handlesDeepLinkJsonAndInvalidInputs() {
+        val deepLink = "lootstream://pair?url=http%3A%2F%2F192.168.1.42%3A8765&code=224312&name=Living%20Room%20PC"
+        val parsed = LootStreamHostClient.parsePairQrPayload(deepLink)!!
+        assertEquals("http://192.168.1.42:8765", parsed.url)
+        assertEquals("224312", parsed.code)
+        assertEquals("Living Room PC", parsed.name)
+
+        val jsonQr = """{"url":"10.0.0.12:8765","quickCode":"654-321","name":"LinuxBox"}"""
+        val parsedJson = LootStreamHostClient.parsePairQrPayload(jsonQr)!!
+        assertEquals("http://10.0.0.12:8765", parsedJson.url)
+        assertEquals("654321", parsedJson.code)
+        assertEquals("LinuxBox", parsedJson.name)
+
+        assertEquals(null, LootStreamHostClient.parsePairQrPayload("not-a-valid-qr-code"))
+    }
+
+    @Test
+    fun zxingQrReader_decodesLootStreamPairUri() {
+        val uri = "lootstream://pair?url=http%3A%2F%2F192.168.1.50%3A8765&code=839201&name=Desktop"
+        val writer = com.google.zxing.qrcode.QRCodeWriter()
+        val matrix = writer.encode(
+            uri,
+            com.google.zxing.BarcodeFormat.QR_CODE,
+            240,
+            240,
+            mapOf(com.google.zxing.EncodeHintType.ERROR_CORRECTION to com.google.zxing.qrcode.decoder.ErrorCorrectionLevel.M)
+        )
+        val w = matrix.width
+        val h = matrix.height
+        val pixels = IntArray(w * h)
+        for (y in 0 until h) {
+            for (x in 0 until w) {
+                pixels[y * w + x] = if (matrix.get(x, y)) android.graphics.Color.BLACK else android.graphics.Color.WHITE
+            }
+        }
+        val source = com.google.zxing.RGBLuminanceSource(w, h, pixels)
+        val bitmap = com.google.zxing.BinaryBitmap(com.google.zxing.common.HybridBinarizer(source))
+        val decoded = com.google.zxing.qrcode.QRCodeReader().decode(bitmap).text
+        assertEquals(uri, decoded)
+    }
 }
