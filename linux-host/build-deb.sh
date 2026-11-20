@@ -19,13 +19,17 @@ mkdir -p \
   "$TMP_PKG/usr/lib/systemd/user"
 
 cp "$SCRIPT_DIR/lootstream_linux_host.py" "$TMP_PKG/opt/lootstream-host/"
+cp "$SCRIPT_DIR/lootstream_desktop_app.py" "$TMP_PKG/opt/lootstream-host/"
 cp "$SCRIPT_DIR/start-lootstream-host.sh" "$TMP_PKG/opt/lootstream-host/"
 cp "$SCRIPT_DIR/web/index.html" "$TMP_PKG/opt/lootstream-host/web/"
 cp "$SCRIPT_DIR/web/styles.css" "$TMP_PKG/opt/lootstream-host/web/"
 cp "$SCRIPT_DIR/web/app.js" "$TMP_PKG/opt/lootstream-host/web/"
 cp "$SCRIPT_DIR/lootstream-host.svg" "$TMP_PKG/usr/share/icons/hicolor/scalable/apps/lootstream-host.svg"
 
-chmod 0755 "$TMP_PKG/opt/lootstream-host/lootstream_linux_host.py" "$TMP_PKG/opt/lootstream-host/start-lootstream-host.sh"
+chmod 0755 \
+  "$TMP_PKG/opt/lootstream-host/lootstream_linux_host.py" \
+  "$TMP_PKG/opt/lootstream-host/lootstream_desktop_app.py" \
+  "$TMP_PKG/opt/lootstream-host/start-lootstream-host.sh"
 
 cat > "$TMP_PKG/usr/bin/lootstream-host" <<'EOF'
 #!/usr/bin/env bash
@@ -36,12 +40,13 @@ chmod 0755 "$TMP_PKG/usr/bin/lootstream-host"
 cat > "$TMP_PKG/usr/share/applications/lootstream-host.desktop" <<'EOF'
 [Desktop Entry]
 Type=Application
-Name=LootStream Linux Host
+Name=LootStream
 GenericName=Personal Media Center & Streaming Host
 Comment=Watch Movies, TV Shows & Music and stream over Wi-Fi to LootStream Android
 Exec=/usr/bin/lootstream-host
 Icon=lootstream-host
 Terminal=false
+StartupWMClass=lootstream-host
 Categories=AudioVideo;Video;Audio;Network;
 Keywords=media;server;movies;tv;music;streaming;lootstream;
 EOF
@@ -75,12 +80,12 @@ Priority: optional
 Architecture: all
 Installed-Size: ${INSTALLED_KB:-128}
 Maintainer: LootStream <support@lootstream.local>
-Depends: python3 (>= 3.8)
-Recommends: ffmpeg, zenity | kdialog
-Description: LootStream Linux Host Media Center and Android LAN Server
- Personal self-hosted media center for browsing and watching Movies,
- TV Shows, and Music on Linux while streaming to LootStream Android
- over Wi-Fi with QR Code and 6-digit Easy Login.
+Depends: python3 (>= 3.8), python3-gi, gir1.2-gtk-3.0, gir1.2-webkit2-4.1 | gir1.2-webkit2-4.0 | python3-tk
+Recommends: ffmpeg, mpv | vlc, zenity | kdialog
+Description: LootStream Native Desktop App and Android LAN Host
+ Standalone Linux desktop media app for browsing and watching Movies,
+ TV Shows, and Music while streaming to LootStream Android over Wi-Fi
+ with QR Code and 6-digit Easy Login.
 EOF
 
 cat > "$TMP_PKG/DEBIAN/postinst" <<'EOF'

@@ -428,6 +428,41 @@ class LinuxHostStore:
                 items.append(item_out)
             return items
 
+    def get_public_items(self) -> List[dict]:
+        return self.build_public_items()
+
+    def update_progress(
+        self,
+        item_id: str,
+        position_ms: Optional[int] = None,
+        duration_ms: Optional[int] = None,
+        watch_status: Optional[str] = None,
+    ) -> None:
+        with self.lock:
+            prog = self.progress.setdefault(item_id, {})
+            if position_ms is not None:
+                prog["playbackPositionMs"] = int(position_ms)
+            if duration_ms is not None and duration_ms > 0:
+                prog["durationMs"] = int(duration_ms)
+            if watch_status is not None:
+                prog["watchStatus"] = str(watch_status)
+            prog["lastPlayedAt"] = int(time.time() * 1000)
+            self._save_state()
+
+    def toggle_favorite(self, item_id: str, is_favorite: bool) -> None:
+        with self.lock:
+            prog = self.progress.setdefault(item_id, {})
+            prog["isFavorite"] = bool(is_favorite)
+            self._save_state()
+
+    def set_watched(self, item_id: str, watch_status: str) -> None:
+        with self.lock:
+            prog = self.progress.setdefault(item_id, {})
+            prog["watchStatus"] = str(watch_status)
+            if prog.get("watchStatus") == "WATCHED":
+                prog["playCount"] = int(prog.get("playCount", 0)) + 1
+            self._save_state()
+
 
 class LootStreamLinuxHandler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -938,25 +973,42 @@ def start_linux_host(
     return httpd
 
 
-def launch_desktop_window(url: str) -> None:
+def launch_desktop_window(
+    url: str,
+    store: Optional[LinuxHostStore] = None,
+    lan_urls: Optional[List[str]] = None,
+    force_browser: bool = False,
+) -> bool:
+    """
+    Launch LootStream as an actual standalone Linux desktop application.
+    Returns True if a desktop app window was opened and closed (meaning the
+    foreground app session finished cleanly), or False to stay running in
+    background/headless server mode.
+    """
     if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
-        return
-    for browser in ("chromium", "chromium-browser", "google-chrome", "brave-browser", "microsoft-edge"):
-        exe = shutil.which(browser)
-        if exe:
-            try:
-                subprocess.Popen(
-                    [exe, f"--app={url}", "--new-window"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-                return
-            except Exception:
-                pass
+        return False
+
+    if force_browser:
+        try:
+            webbrowser.open(url)
+        except Exception:
+            pass
+        return False
+
     try:
-        webbrowser.open(url)
-    except Exception:
-        pass
+        from lootstream_desktop_app import launch_native_desktop_app
+
+        launched = launch_native_desktop_app(url, store=store, lan_urls=lan_urls)
+        if launched:
+            return True
+    except Exception as exc:
+        print(f"[LootStream] Native desktop GUI unavailable ({exc}); continuing in server mode.")
+
+    print(
+        "[LootStream] Native desktop GUI library (GTK WebKit2 or Tkinter) is missing. "
+        "Install python3-gi + gir1.2-webkit2-4.1 (or python3-tk) to display the desktop app window."
+    )
+    return False
 
 
 def default_media_folders() -> List[str]:
@@ -971,12 +1023,13 @@ def default_media_folders() -> List[str]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="LootStream Linux Host & Media Center")
+    parser = argparse.ArgumentParser(description="LootStream Linux Desktop App & Media Host")
     parser.add_argument("--folders", nargs="*", default=None, help="Initial media directories to scan")
     parser.add_argument("--port", type=int, default=8765, help="HTTP server port (default: 8765)")
     parser.add_argument("--pin", default="", help="Optional pairing PIN")
     parser.add_argument("--name", default=f"{socket.gethostname()} Linux Host", help="Display name for this host")
-    parser.add_argument("--no-open", action="store_true", help="Do not launch desktop browser/app window")
+    parser.add_argument("--no-open", action="store_true", help="Run headless server without opening desktop app window")
+    parser.add_argument("--open-browser", action="store_true", help="Explicitly open URL in web browser instead of native app")
     args = parser.parse_args()
 
     config_dir = os.path.join(
@@ -995,14 +1048,25 @@ def main() -> None:
         state_path=state_file,
     )
     lan_ips = get_lan_ipv4_addresses()
+    lan_urls = [f"http://{ip}:{args.port}" for ip in lan_ips]
     local_url = f"http://127.0.0.1:{args.port}/"
     print(f"LootStream Linux Host running at {local_url}")
-    for ip in lan_ips:
-        print(f"  Android LAN URL: http://{ip}:{args.port}")
+    for u in lan_urls:
+        print(f"  Android LAN URL: {u}")
     print(f"  Indexed items: {len(srv.store.catalog)}")  # type: ignore[attr-defined]
 
     if not args.no_open:
-        launch_desktop_window(local_url)
+        closed_from_app = launch_desktop_window(
+            local_url,
+            store=srv.store,  # type: ignore[attr-defined]
+            lan_urls=lan_urls,
+            force_browser=args.open_browser,
+        )
+        if closed_from_app:
+            print("LootStream desktop app closed. Stopping server...")
+            srv.shutdown()
+            srv.server_close()
+            return
 
     try:
         while True:

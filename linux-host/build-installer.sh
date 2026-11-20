@@ -7,6 +7,7 @@ TMP_STAGE="$(mktemp -d)"
 trap 'rm -rf "$TMP_STAGE"' EXIT
 
 cp "$SCRIPT_DIR/lootstream_linux_host.py" "$TMP_STAGE/"
+cp "$SCRIPT_DIR/lootstream_desktop_app.py" "$TMP_STAGE/"
 cp "$SCRIPT_DIR/start-lootstream-host.sh" "$TMP_STAGE/"
 cp "$SCRIPT_DIR/LootStreamHost.desktop" "$TMP_STAGE/"
 cp "$SCRIPT_DIR/lootstream-host.service" "$TMP_STAGE/"
@@ -16,11 +17,12 @@ cp "$SCRIPT_DIR/web/index.html" "$TMP_STAGE/web/"
 cp "$SCRIPT_DIR/web/styles.css" "$TMP_STAGE/web/"
 cp "$SCRIPT_DIR/web/app.js" "$TMP_STAGE/web/"
 
-chmod +x "$TMP_STAGE/start-lootstream-host.sh" "$TMP_STAGE/lootstream_linux_host.py"
+chmod +x "$TMP_STAGE/start-lootstream-host.sh" "$TMP_STAGE/lootstream_linux_host.py" "$TMP_STAGE/lootstream_desktop_app.py"
 
 PAYLOAD_TAR="$TMP_STAGE/payload.tar.gz"
 tar -czf "$PAYLOAD_TAR" -C "$TMP_STAGE" \
   lootstream_linux_host.py \
+  lootstream_desktop_app.py \
   start-lootstream-host.sh \
   LootStreamHost.desktop \
   lootstream-host.service \
@@ -210,6 +212,47 @@ run_gui_wizard_if_needed() {
   fi
 }
 
+has_desktop_gui_runtime() {
+  command -v python3 >/dev/null 2>&1 || return 1
+  python3 -c '
+import importlib.util, sys
+try:
+    import gi
+    gi.require_version("Gtk", "3.0")
+    for v in ("4.1", "4.0"):
+        try:
+            gi.require_version("WebKit2", v)
+            sys.exit(0)
+        except ValueError:
+            pass
+except Exception:
+    pass
+if importlib.util.find_spec("webview") is not None:
+    sys.exit(0)
+if importlib.util.find_spec("tkinter") is not None:
+    sys.exit(0)
+sys.exit(1)
+' >/dev/null 2>&1
+}
+
+distro_gui_packages() {
+  if command -v apt-get >/dev/null 2>&1; then
+    local wk_pkg="gir1.2-webkit2-4.0"
+    if command -v apt-cache >/dev/null 2>&1 && apt-cache show gir1.2-webkit2-4.1 >/dev/null 2>&1; then
+      wk_pkg="gir1.2-webkit2-4.1"
+    fi
+    echo "python3-gi gir1.2-gtk-3.0 $wk_pkg python3-tk"
+  elif command -v dnf >/dev/null 2>&1; then
+    echo "python3-gobject gtk3 webkit2gtk4.1 python3-tkinter"
+  elif command -v pacman >/dev/null 2>&1; then
+    echo "python-gobject gtk3 webkit2gtk-4.1 tk"
+  elif command -v zypper >/dev/null 2>&1; then
+    echo "python3-gobject gtk3 typelib-1_0-WebKit2-4_1 python3-tk"
+  else
+    echo ""
+  fi
+}
+
 check_and_install_deps() {
   [[ "$SKIP_DEPS" -eq 1 ]] && return 0
 
@@ -217,6 +260,14 @@ check_and_install_deps() {
   local missing_optional=()
 
   command -v python3 >/dev/null 2>&1 || missing_required+=("python3")
+  if has_gui_session && ! has_desktop_gui_runtime; then
+    local gui_pkgs
+    gui_pkgs="$(distro_gui_packages)"
+    if [[ -n "$gui_pkgs" ]]; then
+      read -r -a _arr <<< "$gui_pkgs"
+      missing_required+=("${_arr[@]}")
+    fi
+  fi
   command -v ffprobe >/dev/null 2>&1 || missing_optional+=("ffmpeg")
   if ! command -v zenity >/dev/null 2>&1 && ! command -v kdialog >/dev/null 2>&1; then
     missing_optional+=("zenity")
@@ -284,6 +335,7 @@ do_uninstall() {
   rm -f "$APPS_DIR/lootstream-host.desktop"
   rm -f "$ICONS_DIR/lootstream-host.svg"
   rm -f "$SYSTEMD_USER_DIR/lootstream-host.service"
+  rm -f "$HOME/Desktop/LootStream.desktop"
   rm -f "$HOME/Desktop/LootStream Linux Host.desktop"
   if [[ "$PURGE" -eq 1 ]]; then
     rm -rf "$CONFIG_DIR"
@@ -315,7 +367,7 @@ extract_and_install() {
 
   mkdir -p "$PREFIX_DIR" "$BIN_DIR" "$APPS_DIR" "$ICONS_DIR" "$SYSTEMD_USER_DIR"
   tar -xzf "$tmp_tar" -C "$PREFIX_DIR"
-  chmod +x "$PREFIX_DIR/lootstream_linux_host.py" "$PREFIX_DIR/start-lootstream-host.sh"
+  chmod +x "$PREFIX_DIR/lootstream_linux_host.py" "$PREFIX_DIR/lootstream_desktop_app.py" "$PREFIX_DIR/start-lootstream-host.sh"
   cp "$PREFIX_DIR/lootstream-host.svg" "$ICONS_DIR/lootstream-host.svg"
 
   cat > "$BIN_DIR/lootstream-host" <<EOF
@@ -328,12 +380,13 @@ EOF
   local desktop_contents
   desktop_contents="[Desktop Entry]
 Type=Application
-Name=LootStream Linux Host
+Name=LootStream
 GenericName=Personal Media Center & Streaming Host
 Comment=Watch Movies, TV Shows & Music and stream over Wi-Fi to LootStream Android
 Exec=\"$PREFIX_DIR/start-lootstream-host.sh\"
 Icon=$ICONS_DIR/lootstream-host.svg
 Terminal=false
+StartupWMClass=lootstream-host
 Categories=AudioVideo;Video;Audio;Network;
 Keywords=media;server;movies;tv;music;streaming;lootstream;"
 
@@ -341,7 +394,8 @@ Keywords=media;server;movies;tv;music;streaming;lootstream;"
   chmod +x "$APPS_DIR/lootstream-host.desktop"
 
   if [[ "$CREATE_DESKTOP_SHORTCUT" -eq 1 && -d "$HOME/Desktop" ]]; then
-    local desk_file="$HOME/Desktop/LootStream Linux Host.desktop"
+    local desk_file="$HOME/Desktop/LootStream.desktop"
+    rm -f "$HOME/Desktop/LootStream Linux Host.desktop"
     printf '%s\n' "$desktop_contents" > "$desk_file"
     chmod +x "$desk_file"
     if command -v gio >/dev/null 2>&1; then

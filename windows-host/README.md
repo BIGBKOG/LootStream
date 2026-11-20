@@ -1,6 +1,6 @@
-# LootStream Windows Host (`LootStreamHost-Setup.exe`)
+# LootStream Windows Desktop App (`LootStreamHost-Setup.exe`)
 
-Single-file self-installing Windows personal media host & built-in Media Center designed for **LootStream Android** and desktop playback.
+Single-file self-installing **native Windows Desktop Media App** & Android LAN streaming host. Runs directly inside its own Windows desktop window with no browser required.
 
 ## Option 1: Download the Ready-to-Run `.exe` Installer (Recommended)
 
@@ -13,15 +13,19 @@ Once pushed to GitHub, the **Build Windows & Linux Host Installers** workflow au
    - Optionally launches automatically when Windows starts
    - Registers **LootStream Host** in Windows **Installed Apps** (`--uninstall` supported with optional settings cleanup)
    - Adds Windows Firewall allow rules for TCP `8765` + UDP discovery `8766` and HTTP LAN URL binding in a single UAC step
-   - Launches immediately and opens the built-in **Media Center** (`http://127.0.0.1:8765/`) so you can watch Movies, TV Shows, and Music on Windows and connect **LootStream Android** via **QR Code**, **6-digit Easy Login code**, or auto-discovery.
+   - Opens directly as a full **Windows Desktop App** featuring:
+     - **Home & Easy Wi-Fi Login**: Library stats, live **QR Code** + **6-digit code**, and Continue Watching / Recently Added cards
+     - **Movies, TV Shows & Music Libraries**: Filterable poster/cover cards, live Search, ★ Favorites, and ✓ Watched toggles
+     - **Built-In Theater Player**: Watch movies & shows or listen to music right inside the app with Play/Pause, Seek bar, `-10s/+10s`, Prev/Next, Volume/Mute, Fullscreen (`Esc` to exit), and shared Android watch progress sync
+     - **Folders & Server Manager**: Add/remove media folders, configure optional PIN, inspect paired Android devices, and view live activity logs
 
 *(CLI flags: `--install`, `--install --silent`, `--portable`, `--uninstall`, `--uninstall --silent`.)*
 
 ## Option 2: Compile Locally on Windows 10 / 11
 
-If you cloned the source directly on Windows, double-click **`Build-LootStreamHost-Exe.bat`** — it uses Windows' built-in `.NET Framework 4.x` (`csc.exe`) to compile `LootStreamHost.cs` + embedded Web UI resources into the single **`LootStreamHost-Setup.exe`**.
+If you cloned the source directly on Windows, double-click **`Build-LootStreamHost-Exe.bat`** — it uses Windows' built-in `.NET Framework 4.x` (`csc.exe`) to compile `LootStreamHost.cs` into **`LootStreamHost-Setup.exe`**.
 
-## Implemented Host Endpoints
+## Implemented Host Endpoints (for Android & LAN)
 
 - `UDP 8766` (`LOOTSTREAM_DISCOVER_V1`) — Responds on the local Wi-Fi with host name, platform, and LAN URLs for zero-IP discovery
 - `GET /api/info` — Host name, platform, PIN requirement, indexed item count

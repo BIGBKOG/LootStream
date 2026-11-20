@@ -1,9 +1,11 @@
 [Desktop Entry]
 Type=Application
-Name=LootStream Linux Host
-Comment=Personal self-hosted media center for Movies, TV Shows, Music & Android streaming
+Name=LootStream
+GenericName=Personal Media Center & Host
+Comment=Watch Movies, TV Shows & Music and stream over Wi-Fi to LootStream Android
 Exec=bash -lc 'cd "$(dirname "%k")" && ./start-lootstream-host.sh'
-Icon=multimedia-video-player
+Icon=lootstream-host
 Terminal=false
+StartupWMClass=lootstream-host
 Categories=AudioVideo;Video;Audio;Network;
 Keywords=media;server;movies;tv;music;streaming;lootstream;
