@@ -44,17 +44,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build LootStreamHost-Linux.run
+      - name: Build LootStreamHost-Linux.run & LootStreamHost-Linux.deb
         run: |
-          chmod +x linux-host/build-installer.sh
+          chmod +x linux-host/build-installer.sh linux-host/build-deb.sh linux-host/install.sh
           ./linux-host/build-installer.sh
+          ./linux-host/build-deb.sh
           test -x linux-host/LootStreamHost-Linux.run
+          test -f linux-host/LootStreamHost-Linux.deb
 
-      - name: Upload Linux .run Artifact
+      - name: Upload Linux Installers (.run & .deb)
         uses: actions/upload-artifact@v4
         with:
           name: LootStreamHost-Linux
-          path: linux-host/LootStreamHost-Linux.run
+          path: |
+            linux-host/LootStreamHost-Linux.run
+            linux-host/LootStreamHost-Linux.deb
 
   publish-release:
     name: Publish Host Installers to GitHub Releases
@@ -79,7 +83,8 @@ jobs:
           fi
           gh release create "$TAG" \
             dist/LootStreamHost-Setup-Windows/LootStreamHost-Setup.exe \
+            dist/LootStreamHost-Linux/LootStreamHost-Linux.deb \
             dist/LootStreamHost-Linux/LootStreamHost-Linux.run \
             --title "LootStream Host Installers ($TAG)" \
-            --notes "Direct single-file installers — download **LootStreamHost-Setup.exe** (Windows) or **LootStreamHost-Linux.run** (Linux) with no source files or scripts required." \
+            --notes "Direct single-file installers — **LootStreamHost-Setup.exe** (Windows Setup Wizard), **LootStreamHost-Linux.deb** (1-click Ubuntu/Debian/Mint), or **LootStreamHost-Linux.run** (All Linux distros)." \
             --latest

@@ -7,14 +7,15 @@ Single-file self-installing Windows personal media host & built-in Media Center 
 Once pushed to GitHub, the **Build Windows & Linux Host Installers** workflow automatically compiles and publishes **`LootStreamHost-Setup.exe`** to **GitHub Releases** (and Workflow Artifacts):
 
 1. Download **`LootStreamHost-Setup.exe`** from the repository's **Releases** page — no `.cs` files or extra downloads needed.
-2. Double-click **`LootStreamHost-Setup.exe`** and click **Yes** to install:
-   - Installs to `%LocalAppData%\LootStreamHost\LootStreamHost.exe`
+2. Double-click **`LootStreamHost-Setup.exe`** to open the **LootStream Host Setup Wizard**, then click **Install & Launch**:
+   - Lets you pick or keep the install folder (`%LocalAppData%\LootStreamHost\LootStreamHost.exe`) and pre-add your Movie/TV/Music folders right inside the installer
    - Creates **Start Menu** and **Desktop** shortcuts (`LootStream Host`)
-   - Registers **LootStream Host** in Windows **Installed Apps** (`--uninstall` supported)
-   - Adds Windows Firewall allow rules for TCP port `8765` and UDP discovery port `8766`
-   - Opens the built-in **Media Center** (`http://127.0.0.1:8765/`) so you can watch Movies, TV Shows, and Music on Windows and connect **LootStream Android** via **QR Code**, **6-digit Easy Login code**, or auto-discovery.
+   - Optionally launches automatically when Windows starts
+   - Registers **LootStream Host** in Windows **Installed Apps** (`--uninstall` supported with optional settings cleanup)
+   - Adds Windows Firewall allow rules for TCP `8765` + UDP discovery `8766` and HTTP LAN URL binding in a single UAC step
+   - Launches immediately and opens the built-in **Media Center** (`http://127.0.0.1:8765/`) so you can watch Movies, TV Shows, and Music on Windows and connect **LootStream Android** via **QR Code**, **6-digit Easy Login code**, or auto-discovery.
 
-*(Pass `--install` for unattended install, `--portable` to run without installing, or `--uninstall` to remove.)*
+*(CLI flags: `--install`, `--install --silent`, `--portable`, `--uninstall`, `--uninstall --silent`.)*
 
 ## Option 2: Compile Locally on Windows 10 / 11
 

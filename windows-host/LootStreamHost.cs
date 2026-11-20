@@ -75,21 +75,80 @@ namespace LootStreamHost
         public long AddedAt { get; set; }
     }
 
+    public sealed class SetupOptions
+    {
+        public string InstallDir { get; set; }
+        public List<string> InitialFolders { get; set; }
+        public bool CreateShortcuts { get; set; }
+        public bool LaunchOnStartup { get; set; }
+        public bool ConfigureFirewall { get; set; }
+        public bool LaunchAfterInstall { get; set; }
+        public bool IsSilent { get; set; }
+
+        public SetupOptions()
+        {
+            InstallDir = SelfInstaller.GetSavedOrDefaultInstallDir();
+            InitialFolders = SelfInstaller.GetDefaultOrExistingFolders();
+            CreateShortcuts = true;
+            LaunchOnStartup = true;
+            ConfigureFirewall = true;
+            LaunchAfterInstall = true;
+            IsSilent = false;
+        }
+    }
+
     public static class SelfInstaller
     {
         public const string AppVersion = "1.0.0";
         public const string AppDisplayName = "LootStream Host";
         private const string UninstallRegKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\LootStreamHost";
+        private const string RunRegKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
+        private const string RunValueName = "LootStreamHost";
 
-        public static string GetInstallDir()
+        public static string GetAppDataDir()
+        {
+            return Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "LootStreamHost"
+            );
+        }
+
+        public static string GetDefaultInstallDir()
         {
             string localApp = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
             return Path.Combine(localApp, "LootStreamHost");
         }
 
+        public static string GetSavedOrDefaultInstallDir()
+        {
+            try
+            {
+                using (RegistryKey key = Registry.CurrentUser.OpenSubKey(UninstallRegKey))
+                {
+                    if (key != null)
+                    {
+                        string loc = key.GetValue("InstallLocation") as string;
+                        if (!string.IsNullOrEmpty(loc)) return loc;
+                    }
+                }
+            }
+            catch { }
+            return GetDefaultInstallDir();
+        }
+
         public static string GetInstalledExePath()
         {
-            return Path.Combine(GetInstallDir(), "LootStreamHost.exe");
+            return Path.Combine(GetSavedOrDefaultInstallDir(), "LootStreamHost.exe");
+        }
+
+        public static string GetInstalledExePath(string installDir)
+        {
+            return Path.Combine(installDir, "LootStreamHost.exe");
+        }
+
+        public static bool IsAlreadyInstalled()
+        {
+            return File.Exists(GetInstalledExePath());
         }
 
         public static bool IsRunningFromInstallDir()
@@ -106,11 +165,46 @@ namespace LootStreamHost
             }
         }
 
+        public static List<string> GetDefaultOrExistingFolders()
+        {
+            List<string> list = new List<string>();
+            try
+            {
+                string statePath = Path.Combine(GetAppDataDir(), "state.json");
+                if (File.Exists(statePath))
+                {
+                    JavaScriptSerializer ser = new JavaScriptSerializer();
+                    HostState st = ser.Deserialize<HostState>(File.ReadAllText(statePath, Encoding.UTF8));
+                    if (st != null && st.Folders != null)
+                    {
+                        foreach (string f in st.Folders)
+                        {
+                            if (!string.IsNullOrEmpty(f) && Directory.Exists(f) && !list.Contains(f))
+                            {
+                                list.Add(f);
+                            }
+                        }
+                    }
+                }
+            }
+            catch { }
+
+            if (list.Count == 0)
+            {
+                string videos = Environment.GetFolderPath(Environment.SpecialFolder.MyVideos);
+                string music = Environment.GetFolderPath(Environment.SpecialFolder.MyMusic);
+                if (!string.IsNullOrEmpty(videos) && Directory.Exists(videos)) list.Add(videos);
+                if (!string.IsNullOrEmpty(music) && Directory.Exists(music)) list.Add(music);
+            }
+            return list;
+        }
+
         public static bool HandleInstallerArgsOrPrompt(string[] args)
         {
             bool forceInstall = false;
             bool forceUninstall = false;
             bool portableMode = false;
+            bool silentMode = false;
 
             if (args != null)
             {
@@ -119,43 +213,39 @@ namespace LootStreamHost
                     if (string.Equals(arg, "--install", StringComparison.OrdinalIgnoreCase)) forceInstall = true;
                     else if (string.Equals(arg, "--uninstall", StringComparison.OrdinalIgnoreCase)) forceUninstall = true;
                     else if (string.Equals(arg, "--portable", StringComparison.OrdinalIgnoreCase)) portableMode = true;
+                    else if (string.Equals(arg, "--silent", StringComparison.OrdinalIgnoreCase)) silentMode = true;
                 }
             }
 
             if (forceUninstall)
             {
-                PerformUninstall(true);
+                if (silentMode) PerformUninstall(false, false);
+                else ShowUninstallWizard();
                 return false;
             }
 
             if (forceInstall)
             {
-                PerformInstall(true);
+                SetupOptions opts = new SetupOptions();
+                opts.IsSilent = silentMode;
+                opts.LaunchAfterInstall = !silentMode;
+                PerformInstall(opts, null);
                 return false;
             }
 
             if (!portableMode && !IsRunningFromInstallDir())
             {
-                string installedPath = GetInstalledExePath();
-                bool alreadyInstalled = File.Exists(installedPath);
-                string msg = alreadyInstalled
-                    ? "LootStream Host is already installed on this PC.\n\nClick YES to update/reinstall it with Start Menu & Desktop shortcuts and launch, or NO to run portable without installing."
-                    : "Welcome to LootStream Host v" + AppVersion + "!\n\nClick YES to install LootStream Host to your PC (Start Menu, Desktop shortcut, Windows Apps list & Firewall rule for Android streaming), or NO to run portable.";
-
-                DialogResult choice = MessageBox.Show(
-                    msg,
-                    "LootStream Host Setup",
-                    MessageBoxButtons.YesNoCancel,
-                    MessageBoxIcon.Information
-                );
-
-                if (choice == DialogResult.Cancel)
+                using (SetupWizardForm wizard = new SetupWizardForm())
                 {
-                    return false;
-                }
-                if (choice == DialogResult.Yes)
-                {
-                    PerformInstall(true);
+                    DialogResult res = wizard.ShowDialog();
+                    if (wizard.Action == SetupWizardForm.WizardAction.RunPortable)
+                    {
+                        return true;
+                    }
+                    if (wizard.Action == SetupWizardForm.WizardAction.Uninstall)
+                    {
+                        ShowUninstallWizard();
+                    }
                     return false;
                 }
             }
@@ -163,14 +253,56 @@ namespace LootStreamHost
             return true;
         }
 
-        public static void PerformInstall(bool launchAfter)
+        public static void SaveInitialFoldersToState(List<string> folders)
         {
+            if (folders == null) return;
             try
             {
-                string installDir = GetInstallDir();
-                string targetExe = GetInstalledExePath();
+                string appData = GetAppDataDir();
+                Directory.CreateDirectory(appData);
+                string statePath = Path.Combine(appData, "state.json");
+                JavaScriptSerializer ser = new JavaScriptSerializer();
+                ser.MaxJsonLength = 32 * 1024 * 1024;
+
+                HostState state = null;
+                if (File.Exists(statePath))
+                {
+                    try { state = ser.Deserialize<HostState>(File.ReadAllText(statePath, Encoding.UTF8)); }
+                    catch { state = null; }
+                }
+                if (state == null) state = new HostState();
+                state.Folders = new List<string>();
+                foreach (string folder in folders)
+                {
+                    if (!string.IsNullOrEmpty(folder) && Directory.Exists(folder))
+                    {
+                        string full = Path.GetFullPath(folder);
+                        if (!state.Folders.Contains(full)) state.Folders.Add(full);
+                    }
+                }
+                File.WriteAllText(statePath, ser.Serialize(state), Encoding.UTF8);
+            }
+            catch { }
+        }
+
+        public static bool PerformInstall(SetupOptions options, Action<int, string> progressCallback)
+        {
+            Action<int, string> report = delegate(int pct, string msg)
+            {
+                if (progressCallback != null) progressCallback(pct, msg);
+            };
+
+            try
+            {
+                string installDir = string.IsNullOrEmpty(options.InstallDir)
+                    ? GetDefaultInstallDir()
+                    : Path.GetFullPath(options.InstallDir.Trim());
+                string targetExe = GetInstalledExePath(installDir);
+
+                report(12, "Creating install directory...");
                 Directory.CreateDirectory(installDir);
 
+                report(28, "Copying LootStream Host executable...");
                 string sourceExe = Path.GetFullPath(Application.ExecutablePath);
                 if (!string.Equals(sourceExe, Path.GetFullPath(targetExe), StringComparison.OrdinalIgnoreCase))
                 {
@@ -179,36 +311,51 @@ namespace LootStreamHost
                     File.Copy(sourceExe, targetExe, true);
                 }
 
-                CreateShortcut(
-                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "LootStream Host.lnk"),
-                    targetExe,
-                    installDir,
-                    "LootStream Personal Media Host & Media Center"
-                );
+                report(46, "Saving shared media folders...");
+                SaveInitialFoldersToState(options.InitialFolders);
 
-                string startMenuDir = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.Programs),
-                    "LootStream Host"
-                );
-                Directory.CreateDirectory(startMenuDir);
-                CreateShortcut(
-                    Path.Combine(startMenuDir, "LootStream Host.lnk"),
-                    targetExe,
-                    installDir,
-                    "LootStream Personal Media Host & Media Center"
-                );
-                CreateShortcut(
-                    Path.Combine(startMenuDir, "Uninstall LootStream Host.lnk"),
-                    targetExe,
-                    installDir,
-                    "Uninstall LootStream Host",
-                    "--uninstall"
-                );
+                if (options.CreateShortcuts)
+                {
+                    report(62, "Creating Desktop & Start Menu shortcuts...");
+                    CreateShortcut(
+                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "LootStream Host.lnk"),
+                        targetExe,
+                        installDir,
+                        "LootStream Personal Media Host & Media Center"
+                    );
 
+                    string startMenuDir = Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.Programs),
+                        "LootStream Host"
+                    );
+                    Directory.CreateDirectory(startMenuDir);
+                    CreateShortcut(
+                        Path.Combine(startMenuDir, "LootStream Host.lnk"),
+                        targetExe,
+                        installDir,
+                        "LootStream Personal Media Host & Media Center"
+                    );
+                    CreateShortcut(
+                        Path.Combine(startMenuDir, "Uninstall LootStream Host.lnk"),
+                        targetExe,
+                        installDir,
+                        "Uninstall LootStream Host",
+                        "--uninstall"
+                    );
+                }
+
+                report(78, "Registering Windows Apps entry & startup preference...");
                 RegisterUninstallEntry(targetExe, installDir);
-                TryAddFirewallRule(8765);
+                SetLaunchOnStartup(options.LaunchOnStartup, targetExe);
 
-                if (launchAfter)
+                if (options.ConfigureFirewall)
+                {
+                    report(90, "Configuring Windows Firewall & LAN access (TCP 8765 / UDP 8766)...");
+                    TryAddFirewallRule(8765);
+                }
+
+                report(100, "Setup complete! Launching LootStream Host...");
+                if (options.LaunchAfterInstall)
                 {
                     Process.Start(new ProcessStartInfo
                     {
@@ -217,7 +364,7 @@ namespace LootStreamHost
                         UseShellExecute = true
                     });
                 }
-                else
+                else if (!options.IsSilent && progressCallback == null)
                 {
                     MessageBox.Show(
                         "LootStream Host was installed to:\n" + targetExe,
@@ -226,31 +373,36 @@ namespace LootStreamHost
                         MessageBoxIcon.Information
                     );
                 }
+                return true;
             }
             catch (Exception ex)
             {
-                MessageBox.Show(
-                    "Installation failed: " + ex.Message,
-                    "LootStream Host Setup Error",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Error
-                );
+                if (!options.IsSilent)
+                {
+                    MessageBox.Show(
+                        "Installation failed: " + ex.Message,
+                        "LootStream Host Setup Error",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Error
+                    );
+                }
+                return false;
             }
         }
 
-        public static void PerformUninstall(bool silentPrompt)
+        public static void ShowUninstallWizard()
         {
-            if (silentPrompt)
+            using (UninstallForm dlg = new UninstallForm())
             {
-                DialogResult res = MessageBox.Show(
-                    "Uninstall LootStream Host from this PC?\n(Your media files will not be touched.)",
-                    "Uninstall LootStream Host",
-                    MessageBoxButtons.YesNo,
-                    MessageBoxIcon.Question
-                );
-                if (res != DialogResult.Yes) return;
+                if (dlg.ShowDialog() == DialogResult.Yes)
+                {
+                    PerformUninstall(dlg.PurgeSettings, true);
+                }
             }
+        }
 
+        public static void PerformUninstall(bool purgeSettings, bool showCompletionDialog)
+        {
             try
             {
                 StopOtherRunningInstances();
@@ -267,13 +419,25 @@ namespace LootStreamHost
                 );
                 if (Directory.Exists(startMenuDir)) Directory.Delete(startMenuDir, true);
 
+                string installDir = GetSavedOrDefaultInstallDir();
+                SetLaunchOnStartup(false, "");
+
                 try
                 {
                     Registry.CurrentUser.DeleteSubKeyTree(UninstallRegKey, false);
                 }
                 catch { }
 
-                string installDir = GetInstallDir();
+                if (purgeSettings)
+                {
+                    try
+                    {
+                        string appData = GetAppDataDir();
+                        if (Directory.Exists(appData)) Directory.Delete(appData, true);
+                    }
+                    catch { }
+                }
+
                 string cleanupCmd = "/c timeout /t 2 /nobreak >nul & rmdir /s /q \"" + installDir + "\"";
                 Process.Start(new ProcessStartInfo
                 {
@@ -283,21 +447,27 @@ namespace LootStreamHost
                     CreateNoWindow = true
                 });
 
-                MessageBox.Show(
-                    "LootStream Host has been uninstalled.",
-                    "Uninstall Complete",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Information
-                );
+                if (showCompletionDialog)
+                {
+                    MessageBox.Show(
+                        "LootStream Host has been uninstalled cleanly.",
+                        "Uninstall Complete",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information
+                    );
+                }
             }
             catch (Exception ex)
             {
-                MessageBox.Show(
-                    "Uninstall warning: " + ex.Message,
-                    "Uninstall",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning
-                );
+                if (showCompletionDialog)
+                {
+                    MessageBox.Show(
+                        "Uninstall warning: " + ex.Message,
+                        "Uninstall",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning
+                    );
+                }
             }
         }
 
@@ -315,6 +485,26 @@ namespace LootStreamHost
                 }
                 catch { }
             }
+        }
+
+        private static void SetLaunchOnStartup(bool enable, string exePath)
+        {
+            try
+            {
+                using (RegistryKey key = Registry.CurrentUser.OpenSubKey(RunRegKey, true))
+                {
+                    if (key == null) return;
+                    if (enable && !string.IsNullOrEmpty(exePath))
+                    {
+                        key.SetValue(RunValueName, "\"" + exePath + "\"");
+                    }
+                    else
+                    {
+                        key.DeleteValue(RunValueName, false);
+                    }
+                }
+            }
+            catch { }
         }
 
         private static void RegisterUninstallEntry(string exePath, string installDir)
@@ -368,32 +558,499 @@ namespace LootStreamHost
         {
             try
             {
-                Process pTcp = Process.Start(new ProcessStartInfo
+                // Run all netsh commands in ONE elevated process (at most a single UAC prompt)
+                string combinedArgs = string.Format(
+                    "/c netsh advfirewall firewall delete rule name=\"LootStream Host (TCP {0})\" >nul 2>&1 & " +
+                    "netsh advfirewall firewall add rule name=\"LootStream Host (TCP {0})\" dir=in action=allow protocol=TCP localport={0} & " +
+                    "netsh advfirewall firewall delete rule name=\"LootStream Host Discovery (UDP 8766)\" >nul 2>&1 & " +
+                    "netsh advfirewall firewall add rule name=\"LootStream Host Discovery (UDP 8766)\" dir=in action=allow protocol=UDP localport=8766 & " +
+                    "netsh http add urlacl url=http://+:{0}/ sddl=D:(A;;GX;;;WD) >nul 2>&1",
+                    port
+                );
+                Process p = Process.Start(new ProcessStartInfo
                 {
-                    FileName = "netsh.exe",
-                    Arguments = string.Format("advfirewall firewall add rule name=\"LootStream Host (TCP {0})\" dir=in action=allow protocol=TCP localport={0}", port),
+                    FileName = "cmd.exe",
+                    Arguments = combinedArgs,
                     Verb = "runas",
                     WindowStyle = ProcessWindowStyle.Hidden,
                     CreateNoWindow = true,
                     UseShellExecute = true
                 });
-                if (pTcp != null) pTcp.WaitForExit(4000);
-
-                Process pUdp = Process.Start(new ProcessStartInfo
-                {
-                    FileName = "netsh.exe",
-                    Arguments = "advfirewall firewall add rule name=\"LootStream Host Discovery (UDP 8766)\" dir=in action=allow protocol=UDP localport=8766",
-                    Verb = "runas",
-                    WindowStyle = ProcessWindowStyle.Hidden,
-                    CreateNoWindow = true,
-                    UseShellExecute = true
-                });
-                if (pUdp != null) pUdp.WaitForExit(4000);
+                if (p != null) p.WaitForExit(6000);
             }
             catch
             {
-                // User may decline UAC prompt; local playback and existing rules still function.
+                // User may decline UAC prompt; local playback and existing bindings still function.
             }
+        }
+    }
+
+    internal sealed class SetupWizardForm : Form
+    {
+        public enum WizardAction
+        {
+            Cancel,
+            Install,
+            RunPortable,
+            Uninstall
+        }
+
+        public WizardAction Action { get; private set; }
+
+        private TextBox _txtInstallDir;
+        private ListBox _lstFolders;
+        private CheckBox _chkShortcuts;
+        private CheckBox _chkStartup;
+        private CheckBox _chkFirewall;
+        private ProgressBar _progressBar;
+        private Label _lblProgress;
+        private Button _btnInstall;
+        private Button _btnPortable;
+        private Button _btnUninstall;
+        private Button _btnCancel;
+        private Button _btnBrowse;
+        private Button _btnAddFolder;
+        private Button _btnRemoveFolder;
+
+        public SetupWizardForm()
+        {
+            Action = WizardAction.Cancel;
+            BuildUi();
+        }
+
+        private void BuildUi()
+        {
+            Color bg = Color.FromArgb(11, 15, 25);
+            Color surface = Color.FromArgb(19, 25, 38);
+            Color surfaceVar = Color.FromArgb(28, 37, 56);
+            Color cyan = Color.FromArgb(0, 229, 255);
+            Color green = Color.FromArgb(0, 255, 135);
+            Color purple = Color.FromArgb(176, 102, 255);
+            Color textPrimary = Color.FromArgb(241, 245, 249);
+            Color textSecondary = Color.FromArgb(148, 163, 184);
+
+            bool isUpdate = SelfInstaller.IsAlreadyInstalled();
+
+            this.Text = "LootStream Host v" + SelfInstaller.AppVersion + " Setup";
+            this.Size = new Size(590, 560);
+            this.FormBorderStyle = FormBorderStyle.FixedDialog;
+            this.MaximizeBox = false;
+            this.MinimizeBox = true;
+            this.StartPosition = FormStartPosition.CenterScreen;
+            this.BackColor = bg;
+            this.ForeColor = textPrimary;
+            this.Font = new Font("Segoe UI", 9.5f);
+
+            Panel header = new Panel();
+            header.Dock = DockStyle.Top;
+            header.Height = 82;
+            header.BackColor = surface;
+
+            Panel logoBadge = new Panel();
+            logoBadge.Size = new Size(46, 46);
+            logoBadge.Location = new Point(18, 18);
+            logoBadge.BackColor = Color.FromArgb(16, 40, 62);
+            logoBadge.Paint += delegate(object s, PaintEventArgs e)
+            {
+                e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                using (Pen pen = new Pen(cyan, 2.2f))
+                {
+                    e.Graphics.DrawRectangle(pen, 2, 2, 41, 41);
+                }
+                Point[] tri = new Point[] { new Point(17, 12), new Point(35, 23), new Point(17, 34) };
+                using (SolidBrush br = new SolidBrush(green))
+                {
+                    e.Graphics.FillPolygon(br, tri);
+                }
+            };
+
+            Label lblTitle = new Label();
+            lblTitle.Text = isUpdate ? "UPDATE LOOTSTREAM HOST" : "LOOTSTREAM HOST SETUP";
+            lblTitle.Font = new Font("Segoe UI", 14.5f, FontStyle.Bold);
+            lblTitle.ForeColor = cyan;
+            lblTitle.Location = new Point(76, 15);
+            lblTitle.AutoSize = true;
+
+            Label lblSub = new Label();
+            lblSub.Text = "1-Click Personal Media Center (Movies, TV, Music) + Android Wi-Fi / QR Host";
+            lblSub.Font = new Font("Segoe UI", 9f);
+            lblSub.ForeColor = textSecondary;
+            lblSub.Location = new Point(77, 44);
+            lblSub.AutoSize = true;
+
+            header.Controls.Add(logoBadge);
+            header.Controls.Add(lblTitle);
+            header.Controls.Add(lblSub);
+            this.Controls.Add(header);
+
+            int y = 98;
+
+            Label lblPath = new Label();
+            lblPath.Text = "Install Folder";
+            lblPath.Font = new Font("Segoe UI", 9.5f, FontStyle.Bold);
+            lblPath.ForeColor = textPrimary;
+            lblPath.Location = new Point(22, y);
+            lblPath.AutoSize = true;
+            this.Controls.Add(lblPath);
+
+            y += 24;
+            _txtInstallDir = new TextBox();
+            _txtInstallDir.Text = SelfInstaller.GetSavedOrDefaultInstallDir();
+            _txtInstallDir.Location = new Point(22, y);
+            _txtInstallDir.Size = new Size(432, 26);
+            _txtInstallDir.BackColor = surfaceVar;
+            _txtInstallDir.ForeColor = textPrimary;
+            _txtInstallDir.BorderStyle = BorderStyle.FixedSingle;
+            this.Controls.Add(_txtInstallDir);
+
+            _btnBrowse = new Button();
+            _btnBrowse.Text = "Browse...";
+            _btnBrowse.Location = new Point(464, y - 1);
+            _btnBrowse.Size = new Size(92, 28);
+            _btnBrowse.FlatStyle = FlatStyle.Flat;
+            _btnBrowse.FlatAppearance.BorderSize = 0;
+            _btnBrowse.BackColor = surfaceVar;
+            _btnBrowse.ForeColor = cyan;
+            _btnBrowse.Click += delegate
+            {
+                using (FolderBrowserDialog fb = new FolderBrowserDialog())
+                {
+                    fb.Description = "Choose install folder for LootStream Host";
+                    fb.SelectedPath = _txtInstallDir.Text;
+                    if (fb.ShowDialog() == DialogResult.OK && !string.IsNullOrEmpty(fb.SelectedPath))
+                    {
+                        _txtInstallDir.Text = fb.SelectedPath;
+                    }
+                }
+            };
+            this.Controls.Add(_btnBrowse);
+
+            y += 40;
+            Label lblFolders = new Label();
+            lblFolders.Text = "Media Folders to Share (pre-selected automatically — change anytime)";
+            lblFolders.Font = new Font("Segoe UI", 9.5f, FontStyle.Bold);
+            lblFolders.ForeColor = textPrimary;
+            lblFolders.Location = new Point(22, y);
+            lblFolders.AutoSize = true;
+            this.Controls.Add(lblFolders);
+
+            y += 24;
+            _lstFolders = new ListBox();
+            _lstFolders.Location = new Point(22, y);
+            _lstFolders.Size = new Size(432, 92);
+            _lstFolders.BackColor = surface;
+            _lstFolders.ForeColor = textPrimary;
+            _lstFolders.BorderStyle = BorderStyle.FixedSingle;
+            foreach (string f in SelfInstaller.GetDefaultOrExistingFolders())
+            {
+                _lstFolders.Items.Add(f);
+            }
+            this.Controls.Add(_lstFolders);
+
+            _btnAddFolder = new Button();
+            _btnAddFolder.Text = "+ Add Folder";
+            _btnAddFolder.Location = new Point(464, y);
+            _btnAddFolder.Size = new Size(92, 30);
+            _btnAddFolder.FlatStyle = FlatStyle.Flat;
+            _btnAddFolder.FlatAppearance.BorderSize = 0;
+            _btnAddFolder.BackColor = purple;
+            _btnAddFolder.ForeColor = Color.White;
+            _btnAddFolder.Font = new Font("Segoe UI", 8.5f, FontStyle.Bold);
+            _btnAddFolder.Click += delegate
+            {
+                using (FolderBrowserDialog fb = new FolderBrowserDialog())
+                {
+                    fb.Description = "Select a Movies, TV Shows, or Music folder";
+                    if (fb.ShowDialog() == DialogResult.OK && !string.IsNullOrEmpty(fb.SelectedPath))
+                    {
+                        if (!_lstFolders.Items.Contains(fb.SelectedPath))
+                        {
+                            _lstFolders.Items.Add(fb.SelectedPath);
+                        }
+                    }
+                }
+            };
+            this.Controls.Add(_btnAddFolder);
+
+            _btnRemoveFolder = new Button();
+            _btnRemoveFolder.Text = "Remove";
+            _btnRemoveFolder.Location = new Point(464, y + 38);
+            _btnRemoveFolder.Size = new Size(92, 30);
+            _btnRemoveFolder.FlatStyle = FlatStyle.Flat;
+            _btnRemoveFolder.FlatAppearance.BorderSize = 0;
+            _btnRemoveFolder.BackColor = surfaceVar;
+            _btnRemoveFolder.ForeColor = textSecondary;
+            _btnRemoveFolder.Click += delegate
+            {
+                if (_lstFolders.SelectedIndex >= 0)
+                {
+                    _lstFolders.Items.RemoveAt(_lstFolders.SelectedIndex);
+                }
+            };
+            this.Controls.Add(_btnRemoveFolder);
+
+            y += 108;
+            Panel optsPanel = new Panel();
+            optsPanel.Location = new Point(22, y);
+            optsPanel.Size = new Size(534, 96);
+            optsPanel.BackColor = surface;
+            optsPanel.Padding = new Padding(12);
+
+            _chkShortcuts = new CheckBox();
+            _chkShortcuts.Text = "Create Desktop && Start Menu shortcuts";
+            _chkShortcuts.Checked = true;
+            _chkShortcuts.Location = new Point(14, 10);
+            _chkShortcuts.AutoSize = true;
+            _chkShortcuts.ForeColor = textPrimary;
+
+            _chkStartup = new CheckBox();
+            _chkStartup.Text = "Launch automatically when Windows starts";
+            _chkStartup.Checked = true;
+            _chkStartup.Location = new Point(14, 38);
+            _chkStartup.AutoSize = true;
+            _chkStartup.ForeColor = textPrimary;
+
+            _chkFirewall = new CheckBox();
+            _chkFirewall.Text = "Allow Wi-Fi streaming && QR discovery in Windows Firewall (TCP 8765 / UDP 8766)";
+            _chkFirewall.Checked = true;
+            _chkFirewall.Location = new Point(14, 66);
+            _chkFirewall.AutoSize = true;
+            _chkFirewall.ForeColor = textPrimary;
+
+            optsPanel.Controls.Add(_chkShortcuts);
+            optsPanel.Controls.Add(_chkStartup);
+            optsPanel.Controls.Add(_chkFirewall);
+            this.Controls.Add(optsPanel);
+
+            y += 110;
+            _lblProgress = new Label();
+            _lblProgress.Text = "Ready — click " + (isUpdate ? "Update & Launch" : "Install & Launch") + " to finish setup in seconds.";
+            _lblProgress.Font = new Font("Segoe UI", 9f);
+            _lblProgress.ForeColor = textSecondary;
+            _lblProgress.Location = new Point(22, y);
+            _lblProgress.Size = new Size(534, 20);
+            this.Controls.Add(_lblProgress);
+
+            y += 24;
+            _progressBar = new ProgressBar();
+            _progressBar.Location = new Point(22, y);
+            _progressBar.Size = new Size(534, 14);
+            _progressBar.Minimum = 0;
+            _progressBar.Maximum = 100;
+            _progressBar.Style = ProgressBarStyle.Continuous;
+            this.Controls.Add(_progressBar);
+
+            y += 28;
+            _btnInstall = new Button();
+            _btnInstall.Text = isUpdate ? "Update && Launch" : "Install && Launch";
+            _btnInstall.Location = new Point(22, y);
+            _btnInstall.Size = new Size(190, 38);
+            _btnInstall.FlatStyle = FlatStyle.Flat;
+            _btnInstall.FlatAppearance.BorderSize = 0;
+            _btnInstall.BackColor = green;
+            _btnInstall.ForeColor = bg;
+            _btnInstall.Font = new Font("Segoe UI", 10f, FontStyle.Bold);
+            _btnInstall.Click += delegate { BeginInstall(); };
+            this.Controls.Add(_btnInstall);
+
+            _btnPortable = new Button();
+            _btnPortable.Text = "Run Portable";
+            _btnPortable.Location = new Point(222, y);
+            _btnPortable.Size = new Size(124, 38);
+            _btnPortable.FlatStyle = FlatStyle.Flat;
+            _btnPortable.FlatAppearance.BorderSize = 0;
+            _btnPortable.BackColor = surfaceVar;
+            _btnPortable.ForeColor = cyan;
+            _btnPortable.Font = new Font("Segoe UI", 9.5f, FontStyle.Bold);
+            _btnPortable.Click += delegate
+            {
+                Action = WizardAction.RunPortable;
+                this.DialogResult = DialogResult.Ignore;
+                this.Close();
+            };
+            this.Controls.Add(_btnPortable);
+
+            if (isUpdate)
+            {
+                _btnUninstall = new Button();
+                _btnUninstall.Text = "Uninstall";
+                _btnUninstall.Location = new Point(356, y);
+                _btnUninstall.Size = new Size(96, 38);
+                _btnUninstall.FlatStyle = FlatStyle.Flat;
+                _btnUninstall.FlatAppearance.BorderSize = 0;
+                _btnUninstall.BackColor = Color.FromArgb(127, 29, 29);
+                _btnUninstall.ForeColor = Color.White;
+                _btnUninstall.Click += delegate
+                {
+                    Action = WizardAction.Uninstall;
+                    this.DialogResult = DialogResult.Abort;
+                    this.Close();
+                };
+                this.Controls.Add(_btnUninstall);
+            }
+
+            _btnCancel = new Button();
+            _btnCancel.Text = "Cancel";
+            _btnCancel.Location = new Point(464, y);
+            _btnCancel.Size = new Size(92, 38);
+            _btnCancel.FlatStyle = FlatStyle.Flat;
+            _btnCancel.FlatAppearance.BorderSize = 0;
+            _btnCancel.BackColor = surfaceVar;
+            _btnCancel.ForeColor = textSecondary;
+            _btnCancel.Click += delegate
+            {
+                Action = WizardAction.Cancel;
+                this.DialogResult = DialogResult.Cancel;
+                this.Close();
+            };
+            this.Controls.Add(_btnCancel);
+
+            this.AcceptButton = _btnInstall;
+            this.CancelButton = _btnCancel;
+        }
+
+        private void SetUiEnabled(bool enabled)
+        {
+            _txtInstallDir.Enabled = enabled;
+            _lstFolders.Enabled = enabled;
+            _chkShortcuts.Enabled = enabled;
+            _chkStartup.Enabled = enabled;
+            _chkFirewall.Enabled = enabled;
+            _btnInstall.Enabled = enabled;
+            _btnPortable.Enabled = enabled;
+            _btnCancel.Enabled = enabled;
+            _btnBrowse.Enabled = enabled;
+            _btnAddFolder.Enabled = enabled;
+            _btnRemoveFolder.Enabled = enabled;
+            if (_btnUninstall != null) _btnUninstall.Enabled = enabled;
+        }
+
+        private void BeginInstall()
+        {
+            SetUiEnabled(false);
+
+            SetupOptions opts = new SetupOptions();
+            opts.InstallDir = _txtInstallDir.Text.Trim();
+            opts.InitialFolders = new List<string>();
+            foreach (object item in _lstFolders.Items)
+            {
+                string path = item != null ? item.ToString() : "";
+                if (!string.IsNullOrEmpty(path)) opts.InitialFolders.Add(path);
+            }
+            opts.CreateShortcuts = _chkShortcuts.Checked;
+            opts.LaunchOnStartup = _chkStartup.Checked;
+            opts.ConfigureFirewall = _chkFirewall.Checked;
+            opts.LaunchAfterInstall = true;
+
+            Thread worker = new Thread(delegate
+            {
+                bool ok = SelfInstaller.PerformInstall(opts, delegate(int pct, string msg)
+                {
+                    if (!this.IsDisposed && this.IsHandleCreated)
+                    {
+                        this.BeginInvoke((Action)delegate
+                        {
+                            _progressBar.Value = Math.Max(0, Math.Min(100, pct));
+                            _lblProgress.Text = msg;
+                            _lblProgress.ForeColor = Color.FromArgb(0, 229, 255);
+                        });
+                    }
+                });
+
+                if (!this.IsDisposed && this.IsHandleCreated)
+                {
+                    this.BeginInvoke((Action)delegate
+                    {
+                        if (ok)
+                        {
+                            Action = WizardAction.Install;
+                            this.DialogResult = DialogResult.OK;
+                            this.Close();
+                        }
+                        else
+                        {
+                            SetUiEnabled(true);
+                            _progressBar.Value = 0;
+                            _lblProgress.Text = "Installation did not complete. Check folder permissions and retry.";
+                            _lblProgress.ForeColor = Color.FromArgb(248, 113, 113);
+                        }
+                    });
+                }
+            });
+            worker.IsBackground = true;
+            worker.Start();
+        }
+    }
+
+    internal sealed class UninstallForm : Form
+    {
+        private CheckBox _chkPurge;
+        public bool PurgeSettings { get { return _chkPurge != null && _chkPurge.Checked; } }
+
+        public UninstallForm()
+        {
+            Color bg = Color.FromArgb(11, 15, 25);
+            Color surface = Color.FromArgb(19, 25, 38);
+            Color surfaceVar = Color.FromArgb(28, 37, 56);
+            Color textPrimary = Color.FromArgb(241, 245, 249);
+            Color textSecondary = Color.FromArgb(148, 163, 184);
+
+            this.Text = "Uninstall LootStream Host";
+            this.Size = new Size(440, 230);
+            this.FormBorderStyle = FormBorderStyle.FixedDialog;
+            this.MaximizeBox = false;
+            this.MinimizeBox = false;
+            this.StartPosition = FormStartPosition.CenterScreen;
+            this.BackColor = bg;
+            this.ForeColor = textPrimary;
+            this.Font = new Font("Segoe UI", 9.5f);
+
+            Label lblTitle = new Label();
+            lblTitle.Text = "Uninstall LootStream Host?";
+            lblTitle.Font = new Font("Segoe UI", 13f, FontStyle.Bold);
+            lblTitle.ForeColor = Color.FromArgb(0, 229, 255);
+            lblTitle.Location = new Point(22, 18);
+            lblTitle.AutoSize = true;
+            this.Controls.Add(lblTitle);
+
+            Label lblBody = new Label();
+            lblBody.Text = "Removes LootStream Host application files, shortcuts, and startup registration.\nYour movie, show, and music files are never modified.";
+            lblBody.ForeColor = textSecondary;
+            lblBody.Location = new Point(22, 50);
+            lblBody.Size = new Size(384, 38);
+            this.Controls.Add(lblBody);
+
+            _chkPurge = new CheckBox();
+            _chkPurge.Text = "Also delete saved settings, shared folder list && watch history";
+            _chkPurge.Location = new Point(22, 98);
+            _chkPurge.AutoSize = true;
+            _chkPurge.ForeColor = textPrimary;
+            this.Controls.Add(_chkPurge);
+
+            Button btnConfirm = new Button();
+            btnConfirm.Text = "Uninstall";
+            btnConfirm.Location = new Point(196, 138);
+            btnConfirm.Size = new Size(105, 34);
+            btnConfirm.FlatStyle = FlatStyle.Flat;
+            btnConfirm.FlatAppearance.BorderSize = 0;
+            btnConfirm.BackColor = Color.FromArgb(220, 38, 38);
+            btnConfirm.ForeColor = Color.White;
+            btnConfirm.Font = new Font("Segoe UI", 9.5f, FontStyle.Bold);
+            btnConfirm.Click += delegate { this.DialogResult = DialogResult.Yes; this.Close(); };
+            this.Controls.Add(btnConfirm);
+
+            Button btnCancel = new Button();
+            btnCancel.Text = "Cancel";
+            btnCancel.Location = new Point(311, 138);
+            btnCancel.Size = new Size(95, 34);
+            btnCancel.FlatStyle = FlatStyle.Flat;
+            btnCancel.FlatAppearance.BorderSize = 0;
+            btnCancel.BackColor = surfaceVar;
+            btnCancel.ForeColor = textPrimary;
+            btnCancel.Click += delegate { this.DialogResult = DialogResult.Cancel; this.Close(); };
+            this.Controls.Add(btnCancel);
+
+            this.CancelButton = btnCancel;
         }
     }
 

@@ -16,31 +16,39 @@ Self-hosted personal media center & LAN streaming server for Linux — inspired 
   - Persists shared folders, pairing PIN/tokens, paired device list, and watch progress in `~/.config/lootstream-host/state.json`.
 - **Zero Third-Party Python Dependencies**: Runs purely on standard library **Python 3**.
 
-## Quick Start (Single Self-Installing Executable)
+## Quick Start (3 Easy Install Options)
 
-Everything — the Python server, Ampchor-inspired Media Center Web UI, desktop menu entry, and `systemd --user` service — is bundled inside **`LootStreamHost-Linux.run`**:
+### Option 1: Double-Click `.deb` (Ubuntu, Debian, Linux Mint, Pop!_OS)
+Download **`LootStreamHost-Linux.deb`** from GitHub Releases (or build with `./linux-host/build-deb.sh`) and double-click it to install via Software Center / `apt`:
+- Automatically installs `python3` if needed, registers **LootStream Linux Host** with its custom cyber icon in your app menu, creates `/usr/bin/lootstream-host`, and configures UFW firewall rules if active.
+
+### Option 2: 1-Command Terminal Installer (No `chmod +x` needed)
+```bash
+bash linux-host/install.sh
+```
+*(Or pass flags like `bash linux-host/install.sh --silent --enable-service --firewall`.)*
+
+### Option 3: Graphical All-in-One Executable (`LootStreamHost-Linux.run`)
+Everything — Python server, Media Center Web UI, custom SVG icon, desktop shortcut, and `systemd --user` service — is bundled inside **`LootStreamHost-Linux.run`**. When run in a desktop session, it opens a **Zenity/KDialog Setup Wizard** for 1-click install, shortcuts, autostart, and firewall setup:
 
 ```bash
 chmod +x linux-host/LootStreamHost-Linux.run
 ./linux-host/LootStreamHost-Linux.run
 ```
 
-On first run, **`LootStreamHost-Linux.run`**:
-1. Checks and offers to install required/optional system packages (`python3`, `ffmpeg`, `zenity`) via your Linux package manager (`apt`, `dnf`, `pacman`, `zypper`, or `apk`) — use `--auto-deps` to install automatically or `--skip-deps` to skip.
-2. Extracts and installs the full app to `~/.local/share/lootstream-host/`, adds the `lootstream-host` command in `~/.local/bin/`, registers the Linux app-menu shortcut, and creates the `systemd --user` service unit.
-3. Launches LootStream Linux Host immediately and opens the Media Center desktop window.
-
 Useful installer flags:
-- `./linux-host/LootStreamHost-Linux.run --install-only --auto-deps` — install everything without launching yet
-- `./linux-host/LootStreamHost-Linux.run --enable-service` — also enable background autostart via `systemd --user`
-- `./linux-host/LootStreamHost-Linux.run --uninstall` — remove installed files and shortcuts (add `--purge` to delete saved config)
+- `--silent` / `--yes` — 1-command unattended express install + launch
+- `--install-only --auto-deps` — install everything without launching yet
+- `--enable-service` — enable background autostart on login (`systemd --user`)
+- `--firewall` — open TCP `8765` & UDP `8766` in `ufw` if active
+- `--uninstall` — remove installed files and shortcuts (add `--purge` to delete saved config)
 
-You can rebuild `LootStreamHost-Linux.run` anytime after editing files in `linux-host/` with `./linux-host/build-installer.sh`.
+You can rebuild `LootStreamHost-Linux.run` and `LootStreamHost-Linux.deb` anytime using `./linux-host/build-installer.sh` and `./linux-host/build-deb.sh`.
 
 Or pass runtime options (add `--no-open` for headless servers):
 
 ```bash
-./linux-host/LootStreamHost-Linux.run --folders ~/Videos ~/Music --port 8765 --pin 1234
+lootstream-host --folders ~/Videos ~/Music --port 8765 --pin 1234
 ```
 
 Then open `http://127.0.0.1:8765/` in your browser or connect from the **LootStream Android** app by scanning the QR code, typing the 6-digit code, or entering your LAN URL.
